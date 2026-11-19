@@ -305,6 +305,7 @@
       var id = item.getAttribute('data-id');
       var action = target.getAttribute('data-action');
       if (action === 'toggle') toggleTask(id);
+      else if (action === 'subtask-toggle') toggleSubtask(id, target.getAttribute('data-subtask-id'));
       else if (action === 'edit') openTaskDialog(id);
     });
 
@@ -562,7 +563,7 @@
       body.appendChild(createTaskSubtasks(task));
     }
 
-    if (task.photos && task.photos.length) {
+    if (photoTotal) {
       var thumb = createTaskPhoto(task);
       if (thumb) body.appendChild(thumb);
     }
@@ -581,7 +582,7 @@
     return li;
   }
 
-  // Подзадачи под задачей в списке (только отображение — правка в диалоге).
+  // Подзадачи под задачей в списке: текст открывает задачу, кружок отмечает подзадачу.
   function createTaskSubtasks(task) {
     var wrap = document.createElement('span');
     wrap.className = 'task-subtasks';
@@ -592,7 +593,12 @@
 
       var mark = document.createElement('span');
       mark.className = 'task-subtask-mark';
-      mark.setAttribute('aria-hidden', 'true');
+      mark.setAttribute('role', 'checkbox');
+      mark.setAttribute('aria-checked', subtask.done ? 'true' : 'false');
+      mark.setAttribute('aria-label', subtask.done ? 'Вернуть подзадачу в работу' : 'Отметить подзадачу выполненной');
+      mark.setAttribute('title', subtask.done ? 'Вернуть в работу' : 'Отметить выполненной');
+      mark.setAttribute('data-action', 'subtask-toggle');
+      mark.setAttribute('data-subtask-id', subtask.id);
       mark.textContent = '✓';
 
       var text = document.createElement('span');
@@ -607,11 +613,8 @@
     return wrap;
   }
 
-  // Первая фотография задачи в виде миниатюры.
+  // Первая фотография задачи в виде миниатюры (отправленная или ещё ожидающая).
   function createTaskPhoto(task) {
-    var photo = task.photos[0];
-    if (!photo) return null;
-
     var wrap = document.createElement('span');
     wrap.className = 'task-photo';
 
@@ -622,16 +625,28 @@
     img.decoding = 'async';
     wrap.appendChild(img);
 
-    resolvePhotoThumb(task, photo, img);
+    resolveTaskThumb(task, img);
     return wrap;
   }
 
-  function resolvePhotoThumb(task, photo, img) {
+  function resolveTaskThumb(task, img) {
     function apply(dataUrl) {
       if (dataUrl && img.isConnected) img.src = dataUrl;
     }
 
-    Photos.get(photo.id).then(function (record) {
+    var photo = task.photos && task.photos.length ? task.photos[0] : null;
+    var source = photo
+      ? resolvePhotoDataUrl(task, photo)
+      : Photos.listPending(task.id).then(function (records) {
+        var record = records && records[0];
+        return record && record.dataUrl ? record.dataUrl : '';
+      });
+
+    source.then(apply).catch(function () {});
+  }
+
+  function resolvePhotoDataUrl(task, photo) {
+    return Photos.get(photo.id).then(function (record) {
       if (record && record.dataUrl) return record.dataUrl;
       if (thumbInflight[photo.id]) return thumbInflight[photo.id];
       if (!isConfigured() || !navigator.onLine) return '';
@@ -658,7 +673,7 @@
       });
 
       return thumbInflight[photo.id];
-    }).then(apply).catch(function () {});
+    });
   }
 
   function parseDueDate(value) {
@@ -949,6 +964,25 @@
       if (task.id !== id) return task;
       return Object.assign({}, task, {
         done: !task.done,
+        updatedAt: nextTimestamp(task.updatedAt)
+      });
+    });
+    persistTasks();
+    renderAll();
+    scheduleSync();
+  }
+
+  function toggleSubtask(taskId, subtaskId) {
+    if (!taskId || !subtaskId) return;
+
+    state.tasks = state.tasks.map(function (task) {
+      if (task.id !== taskId) return task;
+      var subtasks = (task.subtasks || []).map(function (subtask) {
+        if (subtask.id !== subtaskId) return subtask;
+        return Object.assign({}, subtask, { done: !subtask.done });
+      });
+      return Object.assign({}, task, {
+        subtasks: subtasks,
         updatedAt: nextTimestamp(task.updatedAt)
       });
     });

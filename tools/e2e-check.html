@@ -273,12 +273,37 @@
           report('видно фото в карточке', !!photoBadge);
           report('фото помечено как ожидающее', Boolean(photoBadge && photoBadge.classList.contains('is-pending')));
 
+          var cardThumb = null;
+          for (var t = 0; t < 40; t++) {
+            var cardWithThumb = findTask(doc, 'Позвонить маме и папе');
+            cardThumb = cardWithThumb ? cardWithThumb.querySelector('.task-photo img') : null;
+            if (cardThumb && cardThumb.src.indexOf('data:image/jpeg') === 0) break;
+            await sleep(100);
+          }
+          report('миниатюра фото видна в карточке', Boolean(cardThumb && cardThumb.src.indexOf('data:image/jpeg') === 0));
+
+          var markToToggle = null;
+          Array.prototype.forEach.call(decoratedAgain.querySelectorAll('.task-subtask'), function (row) {
+            if (!markToToggle && !row.classList.contains('is-done')) {
+              markToToggle = row.querySelector('.task-subtask-mark');
+            }
+          });
+          report('кружок подзадачи кликабельный', Boolean(markToToggle && markToToggle.getAttribute('data-action') === 'subtask-toggle'));
+          if (markToToggle) {
+            markToToggle.click();
+            await sleep(100);
+          }
+          report('клик по подзадаче не открывает диалог', doc.getElementById('editDialog').open === false);
+          decoratedAgain = findTask(doc, 'Позвонить маме и папе');
+          report('подзадача отмечена прямо в карточке', Boolean(decoratedAgain && /✓ 2\/2/.test(decoratedAgain.textContent)));
+
           var storedDecorated = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]').filter(function (t) {
             return t.title === 'Позвонить маме и папе';
           })[0] || null;
           report('цвет сохранён локально', Boolean(storedDecorated && storedDecorated.color === 'purple'));
           eq('иконка сохранена локально', storedDecorated ? storedDecorated.icon : '', '💰');
           eq('подзадачи сохранены локально', storedDecorated ? storedDecorated.subtasks.length : -1, 2);
+          eq('отметка подзадачи сохранена локально', storedDecorated ? storedDecorated.subtasks.filter(function (item) { return item.done; }).length : -1, 2);
           eq('ожидающее фото не попало в синхронизацию', storedDecorated ? storedDecorated.photos.length : -1, 0);
 
           decoratedAgain.querySelector('.task-body').click();

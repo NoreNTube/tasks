@@ -1014,6 +1014,13 @@ dialog.sheet[open] {
   font-size: 9px;
   line-height: 1;
   color: transparent;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.task-subtask:hover .task-subtask-mark {
+  border-color: var(--accent);
 }
 
 .task-subtask.is-done .task-subtask-mark {
