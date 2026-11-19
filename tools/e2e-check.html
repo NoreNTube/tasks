@@ -184,6 +184,7 @@
           eq('диалог редактирования открыт', doc.getElementById('editDialog').open, true);
           doc.getElementById('editTitle').value = 'Позвонить маме и папе';
           doc.getElementById('editDue').value = isoDate(1);
+          doc.getElementById('editDueTime').value = '09:30';
           doc.getElementById('editPriority').value = 'high';
           doc.getElementById('editForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
           await sleep(120);
@@ -192,12 +193,16 @@
           report('название обновлено', !!edited);
           report('бейдж «важное»', Boolean(edited && edited.querySelector('.meta-item.high')));
           report('срок «завтра»', Boolean(edited && /завтра/.test(edited.textContent)));
+          report('время срока на карточке', Boolean(edited && /09:30/.test(edited.textContent)));
 
           // localStorage
           var stored = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]');
           eq('в localStorage две записи', stored.length, 2);
           report('изменения сохранены локально', stored.some(function (t) {
             return t.title === 'Позвонить маме и папе' && t.priority === 'high';
+          }));
+          report('время срока сохранено локально', stored.some(function (t) {
+            return t.title === 'Позвонить маме и папе' && t.dueTime === '09:30';
           }));
 
           // Перезагрузка — данные на месте

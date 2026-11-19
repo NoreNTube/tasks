@@ -135,10 +135,13 @@
       </label>
 
       <div class="field-row">
-        <label class="field">
+        <div class="field">
           <span>Срок</span>
-          <input id="editDue" type="date">
-        </label>
+          <div class="due-inputs">
+            <input id="editDue" type="date" aria-label="Дата срока">
+            <input id="editDueTime" type="time" aria-label="Время срока">
+          </div>
+        </div>
         <label class="field">
           <span>Приоритет</span>
           <select id="editPriority">

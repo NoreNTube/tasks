@@ -62,7 +62,7 @@
       function rec(overrides) {
         var base = {
           id: 'a', title: 'Задача', notes: '', done: false,
-          priority: 'normal', due: '', createdAt: 1000, updatedAt: 1000, deletedAt: 0
+          priority: 'normal', due: '', dueTime: '', createdAt: 1000, updatedAt: 1000, deletedAt: 0
         };
         return Object.assign(base, overrides || {});
       }
@@ -97,6 +97,14 @@
         eq(n.due, '');
         assert(n.createdAt > 0, 'createdAt должен стать текущим временем');
         eq(n.updatedAt, n.createdAt);
+      });
+
+      test('normalize: время срока сохраняется и валидируется', function () {
+        eq(Store.normalize(rec({ due: '2026-05-01', dueTime: '09:30' })).dueTime, '09:30');
+        eq(Store.normalize(rec({ due: '2026-05-01', dueTime: '23:59' })).dueTime, '23:59');
+        eq(Store.normalize(rec({ dueTime: '25:00' })).dueTime, '');
+        eq(Store.normalize(rec({ dueTime: '9:30' })).dueTime, '');
+        eq(Store.normalize(rec({})).dueTime, '');
       });
 
       test('normalize: обрезает слишком длинные поля', function () {
@@ -298,6 +306,15 @@
           rec({ id: 'due', due: '2026-01-01', createdAt: 4 })
         ].sort(Store.compareTasks).map(function (task) { return task.id; });
         eq(sorted.join(','), 'high,due,normal,done');
+      });
+
+      test('compareTasks: в один день задачи с более ранним временем выше', function () {
+        var sorted = [
+          rec({ id: 'late', due: '2026-02-01', dueTime: '18:00', createdAt: 1 }),
+          rec({ id: 'early', due: '2026-02-01', dueTime: '09:00', createdAt: 2 }),
+          rec({ id: 'dateOnly', due: '2026-02-01', createdAt: 3 })
+        ].sort(Store.compareTasks).map(function (task) { return task.id; });
+        eq(sorted.join(','), 'dateOnly,early,late');
       });
 
 

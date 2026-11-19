@@ -25,7 +25,7 @@
  *
  *  Лист tasks:
  *    id | title | notes | done | priority | due | createdAt | updatedAt | deletedAt |
- *    color | icon | subtasks(JSON) | photos(JSON)
+ *    color | icon | subtasks(JSON) | photos(JSON) | dueTime
  *
  *  Лист photos (файлы кусками base64, по 40 000 символов):
  *    id | taskId | createdAt | mime | width | height | size | chunkIndex | data
@@ -52,11 +52,11 @@ var CFG = {
   PHOTO_CHUNK: 40000,
   PHOTO_MAX_CHARS: 400000,
 
-  VERSION: 3
+  VERSION: 4
 };
 
 // Порядок колонок на листе. Менять не нужно.
-var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos'];
+var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime'];
 var PHOTO_COLUMNS = ['id', 'taskId', 'createdAt', 'mime', 'width', 'height', 'size', 'chunkIndex', 'data'];
 var COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'gray'];
 var ICONS = [
@@ -330,7 +330,8 @@ function recordToRow_(rec) {
     rec.color || '',
     rec.icon || '',
     rec.subtasks && rec.subtasks.length ? JSON.stringify(rec.subtasks) : '',
-    rec.photos && rec.photos.length ? JSON.stringify(rec.photos) : ''
+    rec.photos && rec.photos.length ? JSON.stringify(rec.photos) : '',
+    rec.dueTime || ''
   ];
 }
 
@@ -386,7 +387,7 @@ function wins_(a, b) {
 function stableKey_(rec) {
   return JSON.stringify([
     rec.id, rec.title, rec.notes, rec.done,
-    rec.priority, rec.due, rec.createdAt, rec.updatedAt, rec.deletedAt,
+    rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
     rec.color, rec.icon, rec.subtasks, rec.photos
   ]);
 }
@@ -479,6 +480,7 @@ function normalize_(raw) {
     done: raw.done === true || raw.done === 'TRUE' || raw.done === 'true' || raw.done === 1 || raw.done === '1',
     priority: raw.priority === 'high' ? 'high' : 'normal',
     due: /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : '',
+    dueTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.dueTime || '')) ? String(raw.dueTime) : '',
     color: COLORS.indexOf(String(raw.color || '')) >= 0 ? String(raw.color) : '',
     icon: ICONS.indexOf(String(raw.icon || '')) >= 0 ? String(raw.icon) : '',
     subtasks: normalizeSubtasks_(raw.subtasks),

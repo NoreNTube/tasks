@@ -94,6 +94,8 @@
           eq('normalize_: done=TRUE', n.done, true);
           eq('normalize_: priority=high', n.priority, 'high');
           eq('normalize_: due', n.due, '2026-05-01');
+          eq('normalize_: время срока', normalize({ id: 't1', due: '2026-05-01', dueTime: '09:30' }).dueTime, '09:30');
+          eq('normalize_: неверное время срока', normalize({ id: 't2', dueTime: '9:30' }).dueTime, '');
           eq('normalize_: updatedAt', n.updatedAt, 2000);
 
           var bad = normalize({ id: 'y', done: 'maybe', priority: 'urgent', due: '01.05.2026', updatedAt: 0 });
@@ -145,9 +147,11 @@
           eq('normalize_: цвет вне палитры', normalize({ id: 'c2', color: 'rainbow' }).color, '');
           eq('normalize_: иконка', normalize({ id: 'i1', icon: '💰' }).icon, '💰');
           eq('normalize_: иконка вне набора', normalize({ id: 'i2', icon: '🚀' }).icon, '');
-          eq('COLUMNS: 13 колонок', api.COLUMNS.length, 13);
+          eq('COLUMNS: 14 колонок', api.COLUMNS.length, 14);
           eq('COLUMNS: icon после color', api.COLUMNS[10], 'icon');
+          eq('COLUMNS: dueTime последняя', api.COLUMNS[13], 'dueTime');
           eq('recordToRow_: иконка пишется в колонку', api.recordToRow_(normalize({ id: 'i3', icon: '📅' }))[10], '📅');
+          eq('recordToRow_: время срока пишется в колонку', api.recordToRow_(normalize({ id: 't3', due: '2026-05-01', dueTime: '14:15' }))[13], '14:15');
           eq('normalize_: подзадачи из JSON', colored.subtasks.length, 1);
           eq('normalize_: текст подзадачи', colored.subtasks[0].text, 'Шаг');
           eq('normalize_: подзадача выполнена', colored.subtasks[0].done, true);
@@ -162,6 +166,10 @@
           var withIcon = merge([rec({ updatedAt: 1000 })], [rec({ updatedAt: 2000, icon: '📌' })]);
           eq('merge_: иконка применена', withIcon.items[0].icon, '📌');
           eq('merge_: иконка — это изменение', withIcon.changed, 1);
+
+          var withTime = merge([rec({ updatedAt: 1000 })], [rec({ updatedAt: 2000, due: '2026-05-01', dueTime: '09:30' })]);
+          eq('merge_: время срока применено', withTime.items[0].dueTime, '09:30');
+          eq('merge_: время срока — это изменение', withTime.changed, 1);
 
           var iconTieA = merge([rec({ updatedAt: 5000, icon: '📌' })], [rec({ updatedAt: 5000, icon: '⭐' })]);
           var iconTieB = merge([rec({ updatedAt: 5000, icon: '⭐' })], [rec({ updatedAt: 5000, icon: '📌' })]);

@@ -218,6 +218,7 @@
       done: raw.done === true || raw.done === 'true' || raw.done === 'TRUE' || raw.done === 1 || raw.done === '1',
       priority: PRIORITIES.indexOf(String(raw.priority)) >= 0 ? String(raw.priority) : 'normal',
       due: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.due || '')) ? String(raw.due) : '',
+      dueTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.dueTime || '')) ? String(raw.dueTime) : '',
       color: COLOR_KEYS.indexOf(String(raw.color || '')) >= 0 ? String(raw.color) : '',
       icon: ICON_KEYS.indexOf(String(raw.icon || '')) >= 0 ? String(raw.icon) : '',
       subtasks: normalizeSubtasks(raw.subtasks),
@@ -231,7 +232,7 @@
   function stableKey(rec) {
     return JSON.stringify([
       rec.id, rec.title, rec.notes, rec.done,
-      rec.priority, rec.due, rec.createdAt, rec.updatedAt, rec.deletedAt,
+      rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
       rec.color, rec.icon, rec.subtasks, rec.photos
     ]);
   }
@@ -279,8 +280,8 @@
     var pa = a.priority === 'high' ? 0 : 1;
     var pb = b.priority === 'high' ? 0 : 1;
     if (pa !== pb) return pa - pb;
-    var da = a.due || '9999-12-31';
-    var db = b.due || '9999-12-31';
+    var da = a.due ? a.due + ' ' + (a.dueTime || '00:00') : '9999-12-31 00:00';
+    var db = b.due ? b.due + ' ' + (b.dueTime || '00:00') : '9999-12-31 00:00';
     if (da !== db) return da < db ? -1 : 1;
     return b.createdAt - a.createdAt;
   }

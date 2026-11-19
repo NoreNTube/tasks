@@ -835,6 +835,18 @@ dialog.sheet[open] {
   gap: 10px;
 }
 
+.due-inputs {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.due-inputs input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
 .hint {
   margin: 0;
   font-size: 12.5px;
@@ -1556,6 +1568,10 @@ dialog.lightbox::backdrop {
 
   .field-row {
     grid-template-columns: 1fr;
+  }
+
+  .due-inputs {
+    flex-direction: column;
   }
 }
 

@@ -265,6 +265,7 @@
     els.editTitle = $('editTitle');
     els.editNotes = $('editNotes');
     els.editDue = $('editDue');
+    els.editDueTime = $('editDueTime');
     els.editPriority = $('editPriority');
     els.editHint = $('editHint');
     els.deleteTaskBtn = $('deleteTaskBtn');
@@ -521,7 +522,7 @@
     if (task.due) {
       var due = document.createElement('span');
       due.className = 'meta-item due' + (isOverdue(task) ? ' is-overdue' : '');
-      due.textContent = dueLabel(task.due);
+      due.textContent = dueLabel(task.due, task.dueTime);
       meta.appendChild(due);
     }
 
@@ -683,6 +684,17 @@
     return isNaN(date.getTime()) ? null : date;
   }
 
+  function parseDueTime(value) {
+    var match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value || ''));
+    return match ? { hours: Number(match[1]), minutes: Number(match[2]) } : null;
+  }
+
+  function formatClock(value) {
+    var time = parseDueTime(value);
+    if (!time) return '';
+    return String(time.hours).padStart(2, '0') + ':' + String(time.minutes).padStart(2, '0');
+  }
+
   function startOfToday() {
     var now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -691,27 +703,38 @@
   function isOverdue(task) {
     if (!task.due || task.done) return false;
     var due = parseDueDate(task.due);
-    return Boolean(due && due < startOfToday());
+    if (!due) return false;
+    var time = parseDueTime(task.dueTime);
+    if (time) {
+      due.setHours(time.hours, time.minutes, 0, 0);
+      return due.getTime() < Date.now();
+    }
+    return due < startOfToday();
   }
 
-  function dueLabel(value) {
+  function dueLabel(value, time) {
     var due = parseDueDate(value);
     if (!due) return '';
+    var clock = formatClock(time);
     var diff = Math.round((due - startOfToday()) / 86400000);
-    if (diff === 0) return 'сегодня';
-    if (diff === 1) return 'завтра';
-    if (diff === -1) return 'вчера';
-    if (diff === 2) return 'послезавтра';
-    if (diff < 0) {
+    var text;
+    if (diff === 0) text = 'сегодня';
+    else if (diff === 1) text = 'завтра';
+    else if (diff === -1) text = 'вчера';
+    else if (diff === 2) text = 'послезавтра';
+    else if (diff < 0) {
       var daysPast = Math.abs(diff);
-      return 'просрочено на ' + daysPast + ' ' + plural(daysPast, 'день', 'дня', 'дней');
+      text = 'просрочено на ' + daysPast + ' ' + plural(daysPast, 'день', 'дня', 'дней');
+    } else if (diff < 7) {
+      text = 'через ' + diff + ' ' + plural(diff, 'день', 'дня', 'дней');
+    } else {
+      try {
+        text = due.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+      } catch (err) {
+        text = String(value);
+      }
     }
-    if (diff < 7) return 'через ' + diff + ' ' + plural(diff, 'день', 'дня', 'дней');
-    try {
-      return due.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-    } catch (err) {
-      return value;
-    }
+    return clock ? text + ', ' + clock : text;
   }
 
   function countTasks() {
@@ -946,6 +969,7 @@
       done: false,
       priority: 'normal',
       due: '',
+      dueTime: '',
       color: '',
       icon: '',
       subtasks: [],
@@ -1043,6 +1067,7 @@
   function applyDuePreset(kind) {
     if (!kind) {
       els.editDue.value = '';
+      els.editDueTime.value = '';
       return;
     }
     var date = new Date();
@@ -1132,6 +1157,7 @@
       els.editTitle.value = task.title;
       els.editNotes.value = task.notes || '';
       els.editDue.value = task.due || '';
+      els.editDueTime.value = task.dueTime || '';
       els.editPriority.value = task.priority;
 
       task.photos.forEach(function (photo) {
@@ -1145,6 +1171,7 @@
       els.editTitle.value = prefillTitle || '';
       els.editNotes.value = '';
       els.editDue.value = '';
+      els.editDueTime.value = '';
       els.editPriority.value = 'normal';
     }
 
@@ -1264,6 +1291,7 @@
       done: false,
       priority: 'normal',
       due: '',
+      dueTime: '',
       color: '',
       icon: '',
       subtasks: [],
@@ -1293,10 +1321,12 @@
     try {
       await uploadEditorPhotos();
 
+      var dueValue = els.editDue.value || '';
       var patch = {
         title: title.slice(0, 500),
         notes: els.editNotes.value.trim().slice(0, 5000),
-        due: els.editDue.value || '',
+        due: dueValue,
+        dueTime: dueValue ? (els.editDueTime.value || '') : '',
         priority: els.editPriority.value === 'high' ? 'high' : 'normal',
         color: editor.color,
         icon: editor.icon,

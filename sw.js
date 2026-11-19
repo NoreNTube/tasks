@@ -2,7 +2,7 @@
    Данные синхронизации (Apps Script) никогда не кэшируются. */
 'use strict';
 
-var CACHE_NAME = 'tasks-app-v3';
+var CACHE_NAME = 'tasks-app-v4';
 var ASSETS = [
   './',
   './index.html',
