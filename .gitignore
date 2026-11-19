@@ -1,0 +1,14 @@
+# Локальные артефакты проверки
+.chrome-tmp/
+.chrome-profile/
+*-dump.txt
+*-err.txt
+*-summary.txt
+*-lines.txt
+server-pid.txt
+
+# Системный мусор
+__pycache__/
+.DS_Store
+Thumbs.db
+desktop.ini

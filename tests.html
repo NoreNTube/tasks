@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Тесты логики — Задачи</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      padding: 28px 20px 60px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      background: #0b1220;
+      color: #dbe5f5;
+      line-height: 1.55;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; font-family: system-ui, sans-serif; }
+    p.sub { margin: 0 0 18px; color: #8ea2c0; font-size: 13px; }
+    #summary { font-size: 15px; font-weight: 700; margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; }
+    #summary.ok { background: #14361f; color: #7ee2a0; }
+    #summary.fail { background: #3a1414; color: #ff9c9c; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li { padding: 5px 0; border-bottom: 1px solid #1d2a41; font-size: 13px; }
+    li .mark { display: inline-block; width: 20px; }
+    li.ok .mark { color: #4ade80; }
+    li.fail .mark { color: #f87171; }
+    li.fail .msg { display: block; color: #fca5a5; padding-left: 20px; }
+    a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <h1>Тесты логики</h1>
+  <p class="sub">Проверяются нормализация, слияние (Last-Write-Wins) и сортировка задач.</p>
+  <div id="summary">Выполняется…</div>
+  <ul id="results"></ul>
+  <p class="sub" style="margin-top:24px"><a href="index.html">← Вернуться в приложение</a></p>
+
+  <script src="js/storage.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var Store = window.AppStorage;
+      var tests = [];
+      var results = [];
+
+      function test(name, fn) {
+        tests.push({ name: name, fn: fn });
+      }
+
+      function assert(condition, message) {
+        if (!condition) throw new Error(message || 'условие не выполнено');
+      }
+
+      function eq(actual, expected, message) {
+        if (actual !== expected) {
+          throw new Error((message || 'значения не равны') +
+            ' (ожидалось: ' + JSON.stringify(expected) + ', получено: ' + JSON.stringify(actual) + ')');
+        }
+      }
+
+      function rec(overrides) {
+        var base = {
+          id: 'a', title: 'Задача', notes: '', done: false,
+          priority: 'normal', due: '', createdAt: 1000, updatedAt: 1000, deletedAt: 0
+        };
+        return Object.assign(base, overrides || {});
+      }
+
+      test('normalize: без id запись отбрасывается', function () {
+        eq(Store.normalize({ title: 'нет id' }), null);
+        eq(Store.normalize(null), null);
+        eq(Store.normalize('строка'), null);
+      });
+
+      test('normalize: значения приводятся к допустимым', function () {
+        var n = Store.normalize({
+          id: '  x1  ', title: '  Задача  ', done: 'TRUE',
+          priority: 'high', due: '2026-05-01', createdAt: '1000', updatedAt: '2000'
+        });
+        eq(n.id, 'x1');
+        eq(n.title, 'Задача');
+        eq(n.done, true);
+        eq(n.priority, 'high');
+        eq(n.due, '2026-05-01');
+        eq(n.createdAt, 1000);
+        eq(n.updatedAt, 2000);
+      });
+
+      test('normalize: неверные значения заменяются умолчаниями', function () {
+        var n = Store.normalize({
+          id: 'x2', done: 'maybe', priority: 'urgent', due: '01.05.2026',
+          createdAt: -5, updatedAt: 0
+        });
+        eq(n.done, false);
+        eq(n.priority, 'normal');
+        eq(n.due, '');
+        assert(n.createdAt > 0, 'createdAt должен стать текущим временем');
+        eq(n.updatedAt, n.createdAt);
+      });
+
+      test('normalize: обрезает слишком длинные поля', function () {
+        var n = Store.normalize({
+          id: 'x3',
+          title: new Array(700).join('a'),
+          notes: new Array(6000).join('b')
+        });
+        eq(n.title.length, 500);
+        eq(n.notes.length, 5000);
+      });
+
+      test('normalize: цвет из палитры, иначе пусто', function () {
+        eq(Store.normalize(rec({ color: 'blue' })).color, 'blue');
+        eq(Store.normalize(rec({ color: 'rainbow' })).color, '');
+        eq(Store.normalize(rec({ color: '' })).color, '');
+      });
+
+      test('normalize: иконка из набора, иначе пусто', function () {
+        eq(Store.normalize(rec({ icon: '📅' })).icon, '📅');
+        eq(Store.normalize(rec({ icon: '🚀' })).icon, '');
+        eq(Store.normalize(rec({})).icon, '');
+        assert(Store.ICON_KEYS.length >= 20, 'в наборе должно быть не меньше 20 иконок');
+      });
+
+      test('settings: акцент сохраняется и валидируется', function () {
+        var key = Store.KEYS.settings;
+        var backup = window.localStorage.getItem(key);
+
+        try {
+          window.localStorage.removeItem(key);
+          eq(Store.loadSettings().accent, 'blue');
+          eq(Store.saveSettings({ accent: 'purple' }).accent, 'purple');
+          eq(Store.loadSettings().accent, 'purple');
+
+          window.localStorage.setItem(key, JSON.stringify({ accent: 'rainbow' }));
+          eq(Store.loadSettings().accent, 'blue');
+        } finally {
+          if (backup === null) window.localStorage.removeItem(key);
+          else window.localStorage.setItem(key, backup);
+        }
+      });
+
+      test('stableKey: иконка меняет ключ', function () {
+        var a = Store.stableKey(Store.normalize(rec({ icon: '📌' })));
+        var b = Store.stableKey(Store.normalize(rec({ icon: '⭐' })));
+        assert(a !== b, 'ключи записей с разными иконками должны различаться');
+      });
+
+      test('normalize: подзадачи из массива и из JSON-строки', function () {
+        var fromArray = Store.normalize(rec({
+          subtasks: [
+            { id: 's1', text: 'Хлеб', done: true },
+            { text: '  Молоко  ' },
+            { text: '   ' }
+          ]
+        }));
+        eq(fromArray.subtasks.length, 2);
+        eq(fromArray.subtasks[0].text, 'Хлеб');
+        eq(fromArray.subtasks[0].done, true);
+        eq(fromArray.subtasks[1].text, 'Молоко');
+        eq(fromArray.subtasks[1].done, false);
+
+        var fromString = Store.normalize(rec({ subtasks: '[{"text":"Позвонить"}]' }));
+        eq(fromString.subtasks.length, 1);
+        eq(fromString.subtasks[0].text, 'Позвонить');
+
+        var broken = Store.normalize(rec({ subtasks: 'не json' }));
+        eq(broken.subtasks.length, 0);
+      });
+
+      test('normalize: метаданные фотографий проверяются', function () {
+        var n = Store.normalize(rec({
+          photos: [
+            { id: 'p1', mime: 'image/jpeg', width: 100, height: 50, size: 1000, createdAt: 5 },
+            { id: 'p1', mime: 'image/jpeg' },
+            { id: '', mime: 'image/jpeg' },
+            { id: 'p2', mime: 'application/pdf' }
+          ]
+        }));
+        eq(n.photos.length, 2);
+        eq(n.photos[0].id, 'p1');
+        eq(n.photos[1].id, 'p2');
+        eq(n.photos[1].mime, 'image/jpeg');
+        eq(n.photos[0].width, 100);
+      });
+
+      test('merge: цвет и подзадачи входят в сравнение версий', function () {
+        var older = rec({ updatedAt: 1000, color: '' });
+        var newer = rec({
+          updatedAt: 2000,
+          color: 'green',
+          subtasks: [{ id: 's1', text: 'Шаг', done: false }]
+        });
+        var m = Store.merge([newer], [older]);
+        eq(m.items[0].color, 'green');
+        eq(m.items[0].subtasks.length, 1);
+        eq(m.changed.length, 1);
+      });
+
+      test('merge: иконка входит в сравнение версий', function () {
+        var m = Store.merge(
+          [rec({ updatedAt: 2000, icon: '📅' })],
+          [rec({ updatedAt: 1000, icon: '' })]
+        );
+        eq(m.items[0].icon, '📅');
+        eq(m.changed.length, 1);
+
+        var first = Store.merge(
+          [rec({ updatedAt: 5000, icon: '📌' })],
+          [rec({ updatedAt: 5000, icon: '⭐' })]
+        );
+        var second = Store.merge(
+          [rec({ updatedAt: 5000, icon: '⭐' })],
+          [rec({ updatedAt: 5000, icon: '📌' })]
+        );
+        eq(first.items[0].icon, second.items[0].icon);
+      });
+
+      test('merge: локальная запись новее — побеждает она', function () {
+        var m = Store.merge(
+          [rec({ updatedAt: 2000, title: 'новая' })],
+          [rec({ updatedAt: 1000, title: 'старая' })]
+        );
+        eq(m.items.length, 1);
+        eq(m.items[0].title, 'новая');
+        eq(m.changed.length, 1);
+        eq(m.changed[0].title, 'новая');
+      });
+
+      test('merge: серверная запись новее — она побеждает и не отправляется обратно', function () {
+        var m = Store.merge(
+          [rec({ updatedAt: 1000, title: 'локальная' })],
+          [rec({ updatedAt: 3000, title: 'серверная' })]
+        );
+        eq(m.items[0].title, 'серверная');
+        eq(m.changed.length, 0);
+      });
+
+      test('merge: новые локальные записи попадают в changed', function () {
+        var m = Store.merge([rec({ id: 'new', updatedAt: 5000 })], []);
+        eq(m.items.length, 1);
+        eq(m.changed.length, 1);
+        eq(m.changed[0].id, 'new');
+      });
+
+      test('merge: серверные записи, которых нет локально, сохраняются', function () {
+        var m = Store.merge([], [rec({ id: 'srv', title: 'с сервера' })]);
+        eq(m.items.length, 1);
+        eq(m.items[0].title, 'с сервера');
+        eq(m.changed.length, 0);
+      });
+
+      test('merge: новое удаление побеждает старую активную запись', function () {
+        var m = Store.merge(
+          [rec({ deletedAt: 3000, updatedAt: 3000 })],
+          [rec({ updatedAt: 2000 })]
+        );
+        eq(m.items[0].deletedAt, 3000);
+        eq(m.changed.length, 1);
+      });
+
+      test('merge: старая активная запись не воскрешает удалённую', function () {
+        var m = Store.merge(
+          [rec({ updatedAt: 1000, deletedAt: 0 })],
+          [rec({ updatedAt: 3000, deletedAt: 3000 })]
+        );
+        eq(m.items[0].deletedAt, 3000);
+        eq(m.changed.length, 0);
+      });
+
+      test('merge: при равном updatedAt результат детерминирован', function () {
+        var first = Store.merge(
+          [rec({ updatedAt: 5000, title: 'A' })],
+          [rec({ updatedAt: 5000, title: 'B' })]
+        );
+        var second = Store.merge(
+          [rec({ updatedAt: 5000, title: 'B' })],
+          [rec({ updatedAt: 5000, title: 'A' })]
+        );
+        eq(first.items[0].title, second.items[0].title);
+      });
+
+      test('merge: не изменяет исходные массивы', function () {
+        var local = [rec({ updatedAt: 2000, title: 'локальная' })];
+        var remote = [rec({ updatedAt: 1000, title: 'серверная' })];
+        Store.merge(local, remote);
+        eq(local.length, 1);
+        eq(remote.length, 1);
+        eq(local[0].title, 'локальная');
+        eq(remote[0].title, 'серверная');
+      });
+
+      test('compareTasks: активные раньше выполненных, важные и срок — выше', function () {
+        var sorted = [
+          rec({ id: 'done', done: true, createdAt: 1 }),
+          rec({ id: 'normal', createdAt: 2 }),
+          rec({ id: 'high', priority: 'high', createdAt: 3 }),
+          rec({ id: 'due', due: '2026-01-01', createdAt: 4 })
+        ].sort(Store.compareTasks).map(function (task) { return task.id; });
+        eq(sorted.join(','), 'high,due,normal,done');
+      });
+
+
+      function render() {
+        var passed = 0;
+        var list = document.getElementById('results');
+        results.forEach(function (result) {
+          var li = document.createElement('li');
+          li.className = result.ok ? 'ok' : 'fail';
+          var mark = document.createElement('span');
+          mark.className = 'mark';
+          mark.textContent = result.ok ? '✓' : '✕';
+          li.appendChild(mark);
+          li.appendChild(document.createTextNode(result.name));
+          if (!result.ok) {
+            var msg = document.createElement('span');
+            msg.className = 'msg';
+            msg.textContent = result.message;
+            li.appendChild(msg);
+          }
+          list.appendChild(li);
+          if (result.ok) passed++;
+        });
+
+        var summary = document.getElementById('summary');
+        var allOk = passed === results.length;
+        summary.className = allOk ? 'ok' : 'fail';
+        summary.textContent = allOk
+          ? 'Все тесты пройдены: ' + passed + '/' + results.length
+          : 'Провалено: ' + (results.length - passed) + ' из ' + results.length;
+        document.title = (allOk ? 'OK ' : 'FAIL ') + passed + '/' + results.length;
+        document.body.setAttribute('data-tests', allOk ? 'ok' : 'fail');
+      }
+
+      tests.forEach(function (item) {
+        try {
+          item.fn();
+          results.push({ ok: true, name: item.name });
+        } catch (err) {
+          results.push({ ok: false, name: item.name, message: (err && err.message) || String(err) });
+        }
+      });
+
+      render();
+      if (window.console) console.log('Тесты:', results);
+    })();
+  </script>
+</body>
+</html>

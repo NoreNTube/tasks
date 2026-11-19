@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>E2E-проверка интерфейса</title>
+  <style>
+    body { margin: 0; padding: 20px; font-family: ui-monospace, Consolas, monospace; background: #0b1220; color: #e8eefb; }
+    h1 { font: 600 16px system-ui, sans-serif; margin: 0 0 12px; }
+    #summary { margin-bottom: 12px; font-weight: 700; }
+    #summary.ok { color: #4ade80; }
+    #summary.fail { color: #f87171; }
+    ul { padding-left: 0; list-style: none; margin: 0 0 16px; font-size: 13px; }
+    li { padding: 3px 0; }
+    li.ok { color: #86efac; }
+    li.fail { color: #fca5a5; }
+    iframe { width: 420px; height: 680px; border: 1px solid #2a3a55; border-radius: 10px; background: #fff; }
+  </style>
+</head>
+<body>
+  <h1>E2E-проверка интерфейса</h1>
+  <div id="summary">Выполняется…</div>
+  <ul id="results"></ul>
+  <iframe id="app" src="../index.html" title="Приложение"></iframe>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var results = [];
+      var errors = [];
+      var frame = document.getElementById('app');
+      var summary = document.getElementById('summary');
+      var list = document.getElementById('results');
+
+      function report(name, ok, detail) {
+        results.push({ name: name, ok: Boolean(ok), detail: ok ? '' : (detail || '') });
+        var li = document.createElement('li');
+        li.className = ok ? 'ok' : 'fail';
+        li.textContent = (ok ? '✓ ' : '✕ ') + name + (ok || !detail ? '' : ' — ' + detail);
+        list.appendChild(li);
+      }
+
+      function eq(name, actual, expected) {
+        report(name, actual === expected, 'ожидалось ' + JSON.stringify(expected) + ', получено ' + JSON.stringify(actual));
+      }
+
+      function sleep(ms) {
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+      }
+
+      function isoDate(offsetDays) {
+        var d = new Date();
+        d.setDate(d.getDate() + offsetDays);
+        var month = String(d.getMonth() + 1).padStart(2, '0');
+        var day = String(d.getDate()).padStart(2, '0');
+        return d.getFullYear() + '-' + month + '-' + day;
+      }
+
+      function findTask(doc, title) {
+        return Array.prototype.filter.call(doc.querySelectorAll('#taskList .task'), function (li) {
+          return li.querySelector('.task-title').textContent === title;
+        })[0] || null;
+      }
+
+      function makePhotoFile(win, doc) {
+        return new Promise(function (resolve) {
+          var canvas = doc.createElement('canvas');
+          canvas.width = 320;
+          canvas.height = 240;
+          var context = canvas.getContext('2d');
+          context.fillStyle = '#f97316';
+          context.fillRect(0, 0, 320, 240);
+          context.fillStyle = '#ffffff';
+          context.fillRect(40, 40, 140, 90);
+          canvas.toBlob(function (blob) {
+            var file = new win.File([blob], 'test-photo.png', { type: 'image/png' });
+            var transfer = new win.DataTransfer();
+            transfer.items.add(file);
+            resolve(transfer);
+          }, 'image/png');
+        });
+      }
+
+      function finish() {
+        var passed = results.filter(function (r) { return r.ok; }).length;
+        var allOk = passed === results.length && errors.length === 0;
+        summary.className = allOk ? 'ok' : 'fail';
+        summary.textContent = allOk
+          ? 'OK: ' + passed + '/' + results.length + ', ошибок JS нет'
+          : 'FAIL: ' + passed + '/' + results.length + (errors.length ? '; ошибки: ' + errors.join(' | ') : '');
+        document.title = (allOk ? 'OK ' : 'FAIL ') + passed + '/' + results.length;
+        document.body.setAttribute('data-e2e', allOk ? 'ok' : 'fail');
+      }
+
+      frame.addEventListener('load', async function () {
+        var win = frame.contentWindow;
+        var doc = frame.contentDocument;
+
+        win.addEventListener('error', function (e) { errors.push(String(e.message)); });
+        win.addEventListener('unhandledrejection', function (e) { errors.push('rejection: ' + String(e.reason)); });
+
+        try {
+          await sleep(400);
+
+          report('TasksApp доступен', !!win.TasksApp);
+          eq('статус без настроек', doc.getElementById('statusText').textContent, 'Только это устройство');
+          eq('баннер настройки показан', doc.getElementById('setupBanner').hidden, false);
+          eq('пустое состояние показано', doc.getElementById('emptyState').hidden, false);
+          eq('счётчик «Все» = 0', doc.querySelector('[data-count="all"]').textContent, '0');
+          eq('нет сообщения про JavaScript', doc.querySelector('.noscript'), null);
+          eq('плашка ошибки скрыта', win.getComputedStyle(doc.getElementById('errorBanner')).display, 'none');
+
+          doc.getElementById('newTitle').value = 'Черновик';
+          doc.getElementById('detailsBtn').click();
+          await sleep(150);
+          eq('диалог новой задачи открыт', doc.getElementById('editDialog').open, true);
+          eq('заголовок диалога «Новая задача»', doc.getElementById('editHeading').textContent, 'Новая задача');
+          eq('название перенесено из поля', doc.getElementById('editTitle').value, 'Черновик');
+          report('удаление у новой задачи скрыто', doc.getElementById('deleteTaskBtn').hidden);
+          doc.getElementById('editDialog').close();
+          await sleep(150);
+          doc.getElementById('newTitle').value = '';
+
+          var input = doc.getElementById('newTitle');
+          input.value = 'Купить молоко';
+          doc.getElementById('addForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(60);
+          eq('задача добавлена', doc.querySelectorAll('#taskList .task').length, 1);
+          eq('счётчик активных = 1', doc.querySelector('[data-count="active"]').textContent, '1');
+          eq('поле ввода очищено', input.value, '');
+
+          var taskEl = doc.querySelector('#taskList .task');
+          var radius = win.getComputedStyle(taskEl).borderRadius;
+          report('стили применились', radius === '14px', 'border-radius=' + radius);
+
+          try {
+            var manifest = await win.fetch('manifest.webmanifest').then(function (r) { return r.json(); });
+            report('манифест читается', Boolean(manifest && /Задачи/.test(manifest.name)));
+            var iconResponse = await win.fetch('icons/icon-192.png');
+            eq('иконка 192 доступна', iconResponse.status, 200);
+            var swRegs = [];
+            for (var attempt = 0; attempt < 10; attempt++) {
+              swRegs = await win.navigator.serviceWorker.getRegistrations();
+              if (swRegs.length) break;
+              await sleep(200);
+            }
+            report('service worker зарегистрирован', swRegs.length > 0, 'registrations=' + swRegs.length);
+          } catch (assetErr) {
+            report('проверка PWA-ресурсов', false, String(assetErr));
+          }
+
+          doc.querySelector('#taskList .task .check').click();
+          await sleep(60);
+          eq('отметка выполнено', doc.querySelector('#taskList .task').classList.contains('is-done'), true);
+          eq('счётчик выполненных = 1', doc.querySelector('[data-count="done"]').textContent, '1');
+          eq('счётчик активных = 0', doc.querySelector('[data-count="active"]').textContent, '0');
+
+          doc.querySelector('.chip[data-filter="active"]').click();
+          eq('фильтр «Активные» пуст', doc.getElementById('emptyState').hidden, false);
+          report('текст пустого фильтра', /все задачи выполнены/i.test(doc.getElementById('emptyText').textContent), doc.getElementById('emptyText').textContent);
+          doc.querySelector('.chip[data-filter="done"]').click();
+          eq('фильтр «Готово» показывает задачу', doc.querySelectorAll('#taskList .task').length, 1);
+          doc.querySelector('.chip[data-filter="all"]').click();
+          // Вторая задача + поиск
+          input.value = 'Позвонить маме';
+          doc.getElementById('addForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(60);
+          eq('две задачи в списке', doc.querySelectorAll('#taskList .task').length, 2);
+          var search = doc.getElementById('searchInput');
+          search.value = 'маме';
+          search.dispatchEvent(new win.Event('input', { bubbles: true }));
+          await sleep(40);
+          eq('поиск фильтрует', doc.querySelectorAll('#taskList .task').length, 1);
+          search.value = '';
+          search.dispatchEvent(new win.Event('input', { bubbles: true }));
+          await sleep(40);
+          eq('очистка поиска', doc.querySelectorAll('#taskList .task').length, 2);
+
+          // Редактирование
+          var target = findTask(doc, 'Позвонить маме');
+          report('найдена вторая задача', !!target);
+          target.querySelector('.task-body').click();
+          await sleep(120);
+          eq('диалог редактирования открыт', doc.getElementById('editDialog').open, true);
+          doc.getElementById('editTitle').value = 'Позвонить маме и папе';
+          doc.getElementById('editDue').value = isoDate(1);
+          doc.getElementById('editPriority').value = 'high';
+          doc.getElementById('editForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(120);
+          eq('диалог закрыт после сохранения', doc.getElementById('editDialog').open, false);
+          var edited = findTask(doc, 'Позвонить маме и папе');
+          report('название обновлено', !!edited);
+          report('бейдж «важное»', Boolean(edited && edited.querySelector('.meta-item.high')));
+          report('срок «завтра»', Boolean(edited && /завтра/.test(edited.textContent)));
+
+          // localStorage
+          var stored = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]');
+          eq('в localStorage две записи', stored.length, 2);
+          report('изменения сохранены локально', stored.some(function (t) {
+            return t.title === 'Позвонить маме и папе' && t.priority === 'high';
+          }));
+
+          // Перезагрузка — данные на месте
+          var reloaded = new Promise(function (resolve) { frame.addEventListener('load', resolve, { once: true }); });
+          win.location.reload();
+          await reloaded;
+          await sleep(400);
+          doc = frame.contentDocument;
+          eq('после перезагрузки две задачи', doc.querySelectorAll('#taskList .task').length, 2);
+
+          // Цвет, подзадачи, фото
+          var decorated = findTask(doc, 'Позвонить маме и папе');
+          report('задача для оформления найдена', !!decorated);
+          decorated.querySelector('.task-body').click();
+          await sleep(180);
+          eq('диалог открыт', doc.getElementById('editDialog').open, true);
+
+          var purple = doc.querySelector('.swatch[data-color="purple"]');
+          report('палитра цветов отрисована', !!purple);
+          purple.click();
+          eq('цвет выбран', purple.getAttribute('aria-pressed'), 'true');
+
+          var moneyIcon = doc.querySelector('.icon-choice[data-icon="💰"]');
+          report('набор иконок отрисован', !!moneyIcon);
+          moneyIcon.click();
+          eq('иконка выбрана', moneyIcon.getAttribute('aria-pressed'), 'true');
+
+          doc.getElementById('subtaskInput').value = 'Найти номер';
+          doc.getElementById('subtaskAddBtn').click();
+          doc.getElementById('subtaskInput').value = 'Позвонить';
+          doc.getElementById('subtaskAddBtn').click();
+          await sleep(80);
+          eq('добавлены две подзадачи', doc.querySelectorAll('.subtask-row').length, 2);
+          doc.querySelectorAll('.subtask-check')[0].click();
+          await sleep(60);
+          report('подзадача отмечена', doc.querySelectorAll('.subtask-row')[0].classList.contains('is-done'));
+
+          var transfer = await makePhotoFile(win, doc);
+          var photoInput = doc.getElementById('photoInput');
+          photoInput.files = transfer.files;
+          photoInput.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+          var photoImg = null;
+          for (var p = 0; p < 60; p++) {
+            photoImg = doc.querySelector('.photo-tile img');
+            if (photoImg) break;
+            await sleep(100);
+          }
+          report('фото добавлено в диалог', !!photoImg);
+          report('фото сжато в data-url', !!photoImg && photoImg.src.indexOf('data:image/jpeg') === 0);
+          report('виден бейдж «ждёт»', !!doc.querySelector('.photo-badge'));
+
+          doc.getElementById('editForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(500);
+          eq('диалог закрылся после сохранения', doc.getElementById('editDialog').open, false);
+
+          var photoBadge = null;
+          for (var b = 0; b < 30; b++) {
+            var currentCard = findTask(doc, 'Позвонить маме и папе');
+            photoBadge = currentCard ? currentCard.querySelector('.meta-item.photos') : null;
+            if (photoBadge) break;
+            await sleep(100);
+          }
+
+          var decoratedAgain = findTask(doc, 'Позвонить маме и папе');
+          report('карточка существует', !!decoratedAgain);
+          report('карточка получила цвет', Boolean(decoratedAgain && decoratedAgain.classList.contains('has-color')));
+          eq('цветная рамка 4px', decoratedAgain ? win.getComputedStyle(decoratedAgain).borderLeftWidth : '', '4px');
+          report('иконка видна в карточке', Boolean(decoratedAgain &&
+            decoratedAgain.querySelector('.task-icon') &&
+            decoratedAgain.querySelector('.task-icon').textContent === '💰'));
+          report('видны подзадачи 1/2', Boolean(decoratedAgain && /✓ 1\/2/.test(decoratedAgain.textContent)));
+          report('видно фото в карточке', !!photoBadge);
+          report('фото помечено как ожидающее', Boolean(photoBadge && photoBadge.classList.contains('is-pending')));
+
+          var storedDecorated = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]').filter(function (t) {
+            return t.title === 'Позвонить маме и папе';
+          })[0] || null;
+          report('цвет сохранён локально', Boolean(storedDecorated && storedDecorated.color === 'purple'));
+          eq('иконка сохранена локально', storedDecorated ? storedDecorated.icon : '', '💰');
+          eq('подзадачи сохранены локально', storedDecorated ? storedDecorated.subtasks.length : -1, 2);
+          eq('ожидающее фото не попало в синхронизацию', storedDecorated ? storedDecorated.photos.length : -1, 0);
+
+          decoratedAgain.querySelector('.task-body').click();
+          await sleep(200);
+          var restoredImg = null;
+          for (var r = 0; r < 40; r++) {
+            restoredImg = doc.querySelector('.photo-tile img');
+            if (restoredImg) break;
+            await sleep(100);
+          }
+          report('фото восстановлено из IndexedDB', !!restoredImg);
+          eq('подзадачи восстановлены', doc.querySelectorAll('.subtask-row').length, 2);
+          eq('цвет восстановлен', doc.querySelector('.swatch[data-color="purple"]').getAttribute('aria-pressed'), 'true');
+          eq('иконка восстановлена', doc.querySelector('.icon-choice[data-icon="💰"]').getAttribute('aria-pressed'), 'true');
+
+          doc.querySelector('.photo-preview').click();
+          await sleep(300);
+          eq('просмотр фото открыт', doc.getElementById('photoDialog').open, true);
+          report('в просмотре есть картинка', (doc.getElementById('photoPreviewImg').getAttribute('src') || '').indexOf('data:image/jpeg') === 0);
+          doc.getElementById('photoDialog').close();
+          await sleep(100);
+          doc.getElementById('editDialog').close();
+          await sleep(150);
+
+          // Удаление
+          win.confirm = function () { return true; };
+          var toDelete = findTask(doc, 'Купить молоко');
+          report('задача для удаления найдена', !!toDelete);
+          toDelete.querySelector('.task-body').click();
+          await sleep(120);
+          doc.getElementById('deleteTaskBtn').click();
+          await sleep(120);
+          eq('после удаления одна задача', doc.querySelectorAll('#taskList .task').length, 1);
+          var storedAfter = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]');
+          report('удаление сохранено как надгробие', storedAfter.some(function (t) { return t.deletedAt > 0; }));
+
+          // Настройки
+          doc.getElementById('settingsBtn').click();
+          await sleep(120);
+          eq('диалог настроек открыт', doc.getElementById('settingsDialog').open, true);
+          report('есть инструкция по подключению', /Как подключить Google Таблицу/.test(doc.getElementById('settingsDialog').textContent));
+          var themeSelect = doc.getElementById('themeInput');
+          themeSelect.value = 'dark';
+          themeSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+          eq('тема переключается', doc.documentElement.getAttribute('data-theme'), 'dark');
+
+          var accentSwatch = doc.querySelector('#accentRow .swatch[data-accent="green"]');
+          report('палитра акцентов отрисована', !!accentSwatch);
+
+          var whiteAccent = doc.querySelector('#accentRow .swatch[data-accent="white"]');
+          whiteAccent.click();
+          eq('белый акцент применяется', doc.documentElement.style.getPropertyValue('--accent'), '#f8fafc');
+          eq('на белом акценте тёмный текст', doc.documentElement.style.getPropertyValue('--on-accent'), '#111827');
+
+          accentSwatch.click();
+          eq('акцент выбран', accentSwatch.getAttribute('aria-pressed'), 'true');
+          eq('акцент применён к интерфейсу', doc.documentElement.style.getPropertyValue('--accent'), '#22c55e');
+
+          doc.getElementById('settingsForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+          await sleep(200);
+          eq('настройки сохранены и закрыты', doc.getElementById('settingsDialog').open, false);
+          var savedSettings = JSON.parse(win.localStorage.getItem('tasksync.settings.v1') || '{}');
+          eq('акцент сохранён локально', savedSettings.accent, 'green');
+          eq('тема сохранена локально', savedSettings.theme, 'dark');
+          eq('акцент остался после сохранения', doc.documentElement.style.getPropertyValue('--accent'), '#22c55e');
+        } catch (err) {
+          report('исключение в тесте', false, (err && err.message) || String(err));
+        }
+
+        await sleep(150);
+        finish();
+      }, { once: true });
+    })();
+  </script>
+</body>
+</html>

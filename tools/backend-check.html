@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Тесты backend — Code.gs</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; padding: 28px 20px 60px; font-family: ui-monospace, Consolas, monospace; background: #0b1220; color: #dbe5f5; line-height: 1.55; }
+    h1 { font: 600 18px system-ui, sans-serif; margin: 0 0 4px; }
+    p.sub { margin: 0 0 18px; color: #8ea2c0; font-size: 13px; }
+    #summary { margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; font-weight: 700; }
+    #summary.ok { background: #14361f; color: #7ee2a0; }
+    #summary.fail { background: #3a1414; color: #ff9c9c; }
+    ul { list-style: none; margin: 0; padding: 0; }
+    li { padding: 5px 0; border-bottom: 1px solid #1d2a41; font-size: 13px; }
+    li.ok .mark { color: #4ade80; }
+    li.fail .mark { color: #f87171; }
+    li .msg { display: block; padding-left: 20px; color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1>Тесты backend (Code.gs)</h1>
+  <p class="sub">Код Google Apps Script загружается как есть и проверяется без обращения к Google.</p>
+  <div id="summary">Выполняется…</div>
+  <ul id="results"></ul>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var summary = document.getElementById('summary');
+      var list = document.getElementById('results');
+      var results = [];
+
+      function report(name, ok, detail) {
+        results.push(Boolean(ok));
+        var li = document.createElement('li');
+        li.className = ok ? 'ok' : 'fail';
+        var mark = document.createElement('span');
+        mark.className = 'mark';
+        mark.textContent = ok ? '✓' : '✕';
+        li.appendChild(mark);
+        li.appendChild(document.createTextNode(name));
+        if (!ok && detail) {
+          var msg = document.createElement('span');
+          msg.className = 'msg';
+          msg.textContent = detail;
+          li.appendChild(msg);
+        }
+        list.appendChild(li);
+      }
+
+      function eq(name, actual, expected) {
+        report(name, actual === expected, 'ожидалось ' + JSON.stringify(expected) + ', получено ' + JSON.stringify(actual));
+      }
+
+      function rec(overrides) {
+        var base = {
+          id: 'a', title: 'Задача', notes: '', done: false, priority: 'normal',
+          due: '', createdAt: 1000, updatedAt: 1000, deletedAt: 0
+        };
+        return Object.assign({}, base, overrides || {});
+      }
+
+      function finish() {
+        var passed = results.filter(Boolean).length;
+        var allOk = passed === results.length;
+        summary.className = allOk ? 'ok' : 'fail';
+        summary.textContent = allOk
+          ? 'Все тесты backend пройдены: ' + passed + '/' + results.length
+          : 'Провалено: ' + (results.length - passed) + ' из ' + results.length;
+        document.title = (allOk ? 'OK ' : 'FAIL ') + passed + '/' + results.length;
+        document.body.setAttribute('data-backend', allOk ? 'ok' : 'fail');
+      }
+
+      fetch('../apps-script/Code.gs', { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (source) {
+          var api = new Function(source +
+            '\nreturn { merge_: merge_, normalize_: normalize_, wins_: wins_, stableKey_: stableKey_, recordToRow_: recordToRow_, COLUMNS: COLUMNS };')();
+
+          var merge = api.merge_;
+          var normalize = api.normalize_;
+
+          eq('normalize_: без id → null', normalize({ title: 'x' }), null);
+          eq('normalize_: строка → null', normalize('x'), null);
+
+          var n = normalize({ id: ' x ', title: ' Задача ', done: 'TRUE', priority: 'high', due: '2026-05-01', createdAt: 1000, updatedAt: 2000 });
+          eq('normalize_: id обрезан', n.id, 'x');
+          eq('normalize_: заголовок обрезан', n.title, 'Задача');
+          eq('normalize_: done=TRUE', n.done, true);
+          eq('normalize_: priority=high', n.priority, 'high');
+          eq('normalize_: due', n.due, '2026-05-01');
+          eq('normalize_: updatedAt', n.updatedAt, 2000);
+
+          var bad = normalize({ id: 'y', done: 'maybe', priority: 'urgent', due: '01.05.2026', updatedAt: 0 });
+          eq('normalize_: done по умолчанию', bad.done, false);
+          eq('normalize_: priority по умолчанию', bad.priority, 'normal');
+          eq('normalize_: due по умолчанию', bad.due, '');
+          eq('normalize_: updatedAt = createdAt', bad.updatedAt, bad.createdAt);
+
+          var localWins = merge([rec({ updatedAt: 1000, title: 'старая' })], [rec({ updatedAt: 2000, title: 'новая' })]);
+          eq('merge_: клиентская новее → побеждает', localWins.items[0].title, 'новая');
+          eq('merge_: изменено 1', localWins.changed, 1);
+
+          var remoteWins = merge([rec({ updatedAt: 3000, title: 'серверная' })], [rec({ updatedAt: 1000, title: 'локальная' })]);
+          eq('merge_: серверная новее → побеждает', remoteWins.items[0].title, 'серверная');
+          eq('merge_: изменено 0', remoteWins.changed, 0);
+
+          var again = merge(remoteWins.items, [rec({ updatedAt: 1000, title: 'локальная' })]);
+          eq('merge_: идемпотентность', again.changed, 0);
+          eq('merge_: значение не откатилось', again.items[0].title, 'серверная');
+
+          var tomb = merge([rec({ updatedAt: 3000 })], [rec({ updatedAt: 5000, deletedAt: 5000 })]);
+          eq('merge_: удаление побеждает', tomb.items[0].deletedAt, 5000);
+          eq('merge_: удаление применено', tomb.changed, 1);
+
+          var alive = merge([rec({ updatedAt: 5000, deletedAt: 5000 })], [rec({ updatedAt: 3000, deletedAt: 0 })]);
+          eq('merge_: удалённая не воскресает', alive.items[0].deletedAt, 5000);
+          eq('merge_: ничего не отправлено', alive.changed, 0);
+
+          var tieA = merge([rec({ updatedAt: 5000, title: 'A' })], [rec({ updatedAt: 5000, title: 'B' })]);
+          var tieB = merge([rec({ updatedAt: 5000, title: 'B' })], [rec({ updatedAt: 5000, title: 'A' })]);
+          eq('merge_: тай-брейк детерминирован', tieA.items[0].title, tieB.items[0].title);
+
+          var sorted = merge([], [
+            rec({ id: 'b', createdAt: 2000 }),
+            rec({ id: 'a', createdAt: 1000 })
+          ]);
+          eq('merge_: сортировка по createdAt', sorted.items.map(function (r) { return r.id; }).join(','), 'a,b');
+
+          var dirty = merge([rec({ id: 'ok' })], [null, 'строка', {}, { id: '' }]);
+          eq('merge_: мусор игнорируется', dirty.items.length, 1);
+
+          var colored = normalize({
+            id: 'c1',
+            color: 'blue',
+            subtasks: '[{"id":"s1","text":" Шаг ","done":"TRUE"}]',
+            photos: [{ id: 'p1', mime: 'image/jpeg', width: 10, height: 20, size: 30 }]
+          });
+          eq('normalize_: цвет', colored.color, 'blue');
+          eq('normalize_: цвет вне палитры', normalize({ id: 'c2', color: 'rainbow' }).color, '');
+          eq('normalize_: иконка', normalize({ id: 'i1', icon: '💰' }).icon, '💰');
+          eq('normalize_: иконка вне набора', normalize({ id: 'i2', icon: '🚀' }).icon, '');
+          eq('COLUMNS: 13 колонок', api.COLUMNS.length, 13);
+          eq('COLUMNS: icon после color', api.COLUMNS[10], 'icon');
+          eq('recordToRow_: иконка пишется в колонку', api.recordToRow_(normalize({ id: 'i3', icon: '📅' }))[10], '📅');
+          eq('normalize_: подзадачи из JSON', colored.subtasks.length, 1);
+          eq('normalize_: текст подзадачи', colored.subtasks[0].text, 'Шаг');
+          eq('normalize_: подзадача выполнена', colored.subtasks[0].done, true);
+          eq('normalize_: фото', colored.photos.length, 1);
+          eq('normalize_: mime фото', colored.photos[0].mime, 'image/jpeg');
+          eq('normalize_: битые подзадачи', normalize({ id: 'c3', subtasks: 'не json' }).subtasks.length, 0);
+
+          var withColor = merge([rec({ updatedAt: 1000 })], [rec({ updatedAt: 2000, color: 'red' })]);
+          eq('merge_: цвет применён', withColor.items[0].color, 'red');
+          eq('merge_: цвет — это изменение', withColor.changed, 1);
+
+          var withIcon = merge([rec({ updatedAt: 1000 })], [rec({ updatedAt: 2000, icon: '📌' })]);
+          eq('merge_: иконка применена', withIcon.items[0].icon, '📌');
+          eq('merge_: иконка — это изменение', withIcon.changed, 1);
+
+          var iconTieA = merge([rec({ updatedAt: 5000, icon: '📌' })], [rec({ updatedAt: 5000, icon: '⭐' })]);
+          var iconTieB = merge([rec({ updatedAt: 5000, icon: '⭐' })], [rec({ updatedAt: 5000, icon: '📌' })]);
+          eq('merge_: иконка и тай-брейк', iconTieA.items[0].icon, iconTieB.items[0].icon);
+
+          var sub = merge([], [rec({ subtasks: [{ id: 's1', text: 'Шаг', done: true }] })]);
+          eq('merge_: подзадачи сохранены', sub.items[0].subtasks[0].text, 'Шаг');
+
+          eq('merge_: пустые входы', merge(null, null).items.length, 0);
+
+        })
+        .catch(function (err) {
+          report('загрузка Code.gs', false, String(err));
+        })
+        .then(finish);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Задачи — синхронизация с Google Таблицами</title>
+  <meta name="description" content="Задачи с цветами, подзадачами и фотографиями. Синхронизация между телефоном и компьютером через Google Таблицу.">
+  <meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Задачи">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6L9 17l-5-5"></path>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>Задачи</h1>
+          <p>одни и те же на всех устройствах</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="statusBtn" class="status" type="button" title="Синхронизировать сейчас">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="statusText">…</span>
+        </button>
+        <button id="settingsBtn" class="icon-btn" type="button" title="Настройки синхронизации" aria-label="Настройки синхронизации">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.7 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.7a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.3 9c.25.6.83 1 1.48 1.03H21a2 2 0 1 1 0 4h-.09A1.7 1.7 0 0 0 19.4 15z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="setupBanner" class="banner" hidden>
+      <span>Синхронизация не настроена — задачи хранятся только на этом устройстве.</span>
+      <button id="setupBtn" class="link-btn" type="button">Настроить</button>
+    </div>
+
+    <div id="errorBanner" class="banner banner-error" hidden>
+      <span id="errorText"></span>
+      <button id="errorFixBtn" class="link-btn" type="button">Исправить</button>
+    </div>
+
+    <main class="main">
+      <form id="addForm" class="add" autocomplete="off">
+        <label class="sr-only" for="newTitle">Новая задача</label>
+        <input id="newTitle" class="add-input" type="text" maxlength="500" placeholder="Что нужно сделать?" enterkeyhint="done" autocomplete="off">
+        <button class="primary add-btn" type="submit">Добавить</button>
+        <button id="detailsBtn" class="icon-btn details-btn" type="button" title="Создать с цветом, сроком, подзадачами и фото" aria-label="Создать задачу с деталями">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"></path>
+          </svg>
+        </button>
+      </form>
+
+      <div class="toolbar">
+        <div class="chips" role="group" aria-label="Фильтр задач">
+          <button class="chip is-active" type="button" data-filter="all">Все <span class="chip-count" data-count="all">0</span></button>
+          <button class="chip" type="button" data-filter="active">Активные <span class="chip-count" data-count="active">0</span></button>
+          <button class="chip" type="button" data-filter="done">Готово <span class="chip-count" data-count="done">0</span></button>
+        </div>
+        <div class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"></circle>
+            <path d="M20 20l-3.5-3.5"></path>
+          </svg>
+          <input id="searchInput" type="search" placeholder="Поиск" aria-label="Поиск по задачам" autocomplete="off">
+        </div>
+      </div>
+
+      <ul id="taskList" class="task-list" aria-live="polite"></ul>
+
+      <div id="emptyState" class="empty" hidden>
+        <div class="empty-icon" aria-hidden="true">✓</div>
+        <p id="emptyText">Пока пусто</p>
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div id="summary" class="summary">…</div>
+      <button id="syncNowBtn" class="ghost-btn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+          <path d="M21 3v6h-6"></path>
+        </svg>
+        Синхронизировать
+      </button>
+    </footer>
+  </div>
+
+  <dialog id="editDialog" class="sheet" aria-labelledby="editHeading">
+    <form id="editForm" class="sheet-body">
+      <header class="sheet-head">
+        <h2 id="editHeading">Задача</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18"></path>
+          </svg>
+        </button>
+      </header>
+
+      <label class="field">
+        <span>Название</span>
+        <input id="editTitle" type="text" maxlength="500" required autocomplete="off" placeholder="Например, купить продукты">
+      </label>
+
+      <div class="field">
+        <span>Цвет</span>
+        <div id="colorRow" class="color-row" role="group" aria-label="Цвет задачи"></div>
+      </div>
+
+      <div class="field">
+        <span>Иконка</span>
+        <div id="iconRow" class="icon-row" role="group" aria-label="Иконка задачи"></div>
+      </div>
+
+      <label class="field">
+        <span>Заметка</span>
+        <textarea id="editNotes" rows="3" maxlength="5000" placeholder="Детали, ссылки, телефон…"></textarea>
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Срок</span>
+          <input id="editDue" type="date">
+        </label>
+        <label class="field">
+          <span>Приоритет</span>
+          <select id="editPriority">
+            <option value="normal">Обычный</option>
+            <option value="high">Важный</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="due-presets" role="group" aria-label="Быстрый выбор срока">
+        <button type="button" data-due="today">Сегодня</button>
+        <button type="button" data-due="tomorrow">Завтра</button>
+        <button type="button" data-due="week">Через неделю</button>
+        <button type="button" data-due="">Без срока</button>
+      </div>
+
+      <div class="field">
+        <span>Подзадачи</span>
+        <div id="subtaskList" class="subtask-list"></div>
+        <div class="subtask-add">
+          <input id="subtaskInput" type="text" maxlength="300" placeholder="Новая подзадача" autocomplete="off">
+          <button id="subtaskAddBtn" class="ghost-btn" type="button">Добавить</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>Фотографии</span>
+        <div id="photoGrid" class="photo-grid"></div>
+        <label class="photo-add" for="photoInput">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M12 5v14M5 12h14"></path>
+          </svg>
+          Добавить фото
+        </label>
+        <input id="photoInput" class="sr-only" type="file" accept="image/*" multiple>
+        <p class="hint">Фото сжимаются до 1280 px и хранятся в вашей Google Таблице на листе <code>photos</code>.</p>
+      </div>
+
+      <p class="hint" id="editHint"></p>
+
+      <div class="sheet-actions">
+        <button type="button" id="deleteTaskBtn" class="danger-btn">Удалить</button>
+        <button type="submit" id="editSaveBtn" class="primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="sheet" aria-labelledby="settingsHeading">
+    <form id="settingsForm" class="sheet-body">
+      <header class="sheet-head">
+        <h2 id="settingsHeading">Синхронизация</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18"></path>
+          </svg>
+        </button>
+      </header>
+
+      <label class="field">
+        <span>URL веб-приложения Apps Script</span>
+        <input id="apiUrlInput" type="url" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>Токен доступа</span>
+        <input id="tokenInput" type="text" placeholder="тот же, что CFG.TOKEN в Code.gs" autocomplete="off" spellcheck="false">
+      </label>
+
+      <label class="field">
+        <span>Тема оформления</span>
+        <select id="themeInput">
+          <option value="auto">Как в системе</option>
+          <option value="light">Светлая</option>
+          <option value="dark">Тёмная</option>
+        </select>
+      </label>
+
+      <div class="field">
+        <span>Цвет интерфейса</span>
+        <div id="accentRow" class="color-row" role="group" aria-label="Цвет интерфейса"></div>
+      </div>
+
+      <p class="hint" id="settingsHint">Настройки хранятся только в этом браузере. На телефоне их нужно ввести отдельно (или зашить в js/config.js).</p>
+
+      <div class="sheet-actions">
+        <button type="button" id="testBtn" class="ghost-btn">Проверить связь</button>
+        <button type="submit" class="primary">Сохранить</button>
+      </div>
+
+      <details class="help">
+        <summary>Как подключить Google Таблицу</summary>
+        <ol>
+          <li>Создайте Google Таблицу и откройте <strong>Расширения → Apps Script</strong>.</li>
+          <li>Вставьте туда файл <code>apps-script/Code.gs</code> из репозитория и поменяйте <code>TOKEN</code> на свой секрет.</li>
+          <li><strong>Развернуть → Новое развертывание → Веб-приложение</strong>: запуск от имени «Я», доступ «Все».</li>
+          <li>Скопируйте URL, заканчивающийся на <code>/exec</code>, и вставьте его сюда вместе с токеном.</li>
+          <li>Нажмите «Проверить связь» и «Сохранить». На втором устройстве введите те же два значения.</li>
+        </ol>
+        <p>Подробная инструкция, включая публикацию на GitHub Pages, лежит в файле <code>README.md</code>.</p>
+      </details>
+    </form>
+  </dialog>
+
+  <dialog id="photoDialog" class="lightbox" aria-labelledby="photoDialogTitle">
+    <div class="lightbox-body">
+      <div class="lightbox-bar">
+        <h2 id="photoDialogTitle">Фото</h2>
+        <div class="lightbox-actions">
+          <a id="photoDownload" class="ghost-btn" download="photo.jpg" hidden>Скачать</a>
+          <button type="button" class="icon-btn" data-close aria-label="Закрыть">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6L6 18"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="lightbox-preview">
+        <img id="photoPreviewImg" alt="Фото задачи">
+        <p id="photoPreviewHint" class="hint">Загружаем фото…</p>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <noscript>
+    <p class="noscript">Для работы приложения нужен JavaScript.</p>
+  </noscript>
+
+  <script src="js/config.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/photos.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
