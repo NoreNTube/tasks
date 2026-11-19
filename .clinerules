@@ -1,0 +1,19 @@
+# Правила работы с этим репозиторием
+
+## Публикация
+
+- После **каждого** изменения файлов сразу коммитить и пушить в GitHub:
+  `git push origin main` (репозиторий `NoreNTube/tasks`, ветка `main`).
+- Не оставлять готовые изменения только локально и не ждать отдельной просьбы.
+- Git не в PATH: использовать `C:\Program Files\Git\cmd\git.exe`.
+- Сообщения коммитов — на английском, в стиле истории репозитория.
+- Не коммитить служебные файлы проверки (`final-check.txt`, `*-dump.txt`, `*-err.txt`, `server-pid.txt`, `.chrome-profile/`).
+
+## Проверка перед пушем
+
+1. Поднять локальный сервер: `python -m http.server 8123 --bind 127.0.0.1`.
+2. Прогнать в headless Chrome (`--headless=new --virtual-time-budget=30000 --dump-dom`):
+   - `tests.html` — тесты логики;
+   - `tools/backend-check.html` — тесты Code.gs;
+   - `tools/e2e-check.html` — проверка интерфейса.
+3. Убедиться, что в `<title>` стоит `OK`, затем коммит и пуш.
