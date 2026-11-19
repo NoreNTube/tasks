@@ -987,6 +987,68 @@ dialog.sheet[open] {
   color: var(--warning);
 }
 
+/* Подзадачи и миниатюра фото прямо в карточке задачи */
+
+.task-subtasks {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.task-subtask {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.task-subtask-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 9px;
+  line-height: 1;
+  color: transparent;
+}
+
+.task-subtask.is-done .task-subtask-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+}
+
+.task-subtask-text {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.task-subtask.is-done .task-subtask-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.task-photo {
+  display: inline-flex;
+  margin-top: 4px;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-soft);
+}
+
+.task-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .color-row {
   display: flex;
   flex-wrap: wrap;

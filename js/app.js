@@ -48,6 +48,9 @@
   // Черновик акцентного цвета в открытом диалоге настроек.
   var settingsAccent = '';
 
+  // Защита от повторных загрузок миниатюр, пока фото ещё нет в локальном кэше.
+  var thumbInflight = Object.create(null);
+
   /* ------------------------------------------------------------------ */
   /*  Утилиты                                                            */
   /* ------------------------------------------------------------------ */
@@ -555,6 +558,15 @@
 
     if (meta.childNodes.length) body.appendChild(meta);
 
+    if (task.subtasks && task.subtasks.length) {
+      body.appendChild(createTaskSubtasks(task));
+    }
+
+    if (task.photos && task.photos.length) {
+      var thumb = createTaskPhoto(task);
+      if (thumb) body.appendChild(thumb);
+    }
+
     var edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'task-edit';
@@ -567,6 +579,86 @@
     li.appendChild(body);
     li.appendChild(edit);
     return li;
+  }
+
+  // Подзадачи под задачей в списке (только отображение — правка в диалоге).
+  function createTaskSubtasks(task) {
+    var wrap = document.createElement('span');
+    wrap.className = 'task-subtasks';
+
+    task.subtasks.forEach(function (subtask) {
+      var row = document.createElement('span');
+      row.className = 'task-subtask' + (subtask.done ? ' is-done' : '');
+
+      var mark = document.createElement('span');
+      mark.className = 'task-subtask-mark';
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = '✓';
+
+      var text = document.createElement('span');
+      text.className = 'task-subtask-text';
+      text.textContent = subtask.text;
+
+      row.appendChild(mark);
+      row.appendChild(text);
+      wrap.appendChild(row);
+    });
+
+    return wrap;
+  }
+
+  // Первая фотография задачи в виде миниатюры.
+  function createTaskPhoto(task) {
+    var photo = task.photos[0];
+    if (!photo) return null;
+
+    var wrap = document.createElement('span');
+    wrap.className = 'task-photo';
+
+    var img = document.createElement('img');
+    img.className = 'task-thumb';
+    img.alt = '';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    wrap.appendChild(img);
+
+    resolvePhotoThumb(task, photo, img);
+    return wrap;
+  }
+
+  function resolvePhotoThumb(task, photo, img) {
+    function apply(dataUrl) {
+      if (dataUrl && img.isConnected) img.src = dataUrl;
+    }
+
+    Photos.get(photo.id).then(function (record) {
+      if (record && record.dataUrl) return record.dataUrl;
+      if (thumbInflight[photo.id]) return thumbInflight[photo.id];
+      if (!isConfigured() || !navigator.onLine) return '';
+
+      thumbInflight[photo.id] = Api.photoGet(state.settings, photo.id).then(function (result) {
+        var dataUrl = 'data:' + (result.mime || photo.mime || 'image/jpeg') + ';base64,' + result.data;
+        return Photos.put({
+          id: photo.id,
+          taskId: task.id,
+          dataUrl: dataUrl,
+          mime: result.mime || photo.mime,
+          width: photo.width,
+          height: photo.height,
+          size: photo.size,
+          createdAt: photo.createdAt,
+          pending: false
+        }).then(function () { return dataUrl; });
+      }).then(function (dataUrl) {
+        delete thumbInflight[photo.id];
+        return dataUrl;
+      }, function (err) {
+        delete thumbInflight[photo.id];
+        throw err;
+      });
+
+      return thumbInflight[photo.id];
+    }).then(apply).catch(function () {});
   }
 
   function parseDueDate(value) {
