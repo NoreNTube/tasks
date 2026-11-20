@@ -135,6 +135,10 @@
     return isFinite(n) && n > 0 ? Math.floor(n) : 0;
   }
 
+  function asBool(value) {
+    return value === true || value === 'true' || value === 'TRUE' || value === 1 || value === '1';
+  }
+
   function parseArray(value) {
     if (Array.isArray(value)) return value;
     if (typeof value === 'string' && value.trim()) {
@@ -210,12 +214,16 @@
 
     var createdAt = num(raw.createdAt) || Date.now();
     var title = String(raw.title == null ? '' : raw.title).trim().slice(0, 500);
+    var done = asBool(raw.done);
+    var notDone = asBool(raw.notDone) && !done;
 
     return {
       id: id.slice(0, 100),
       title: title || 'Без названия',
       notes: String(raw.notes == null ? '' : raw.notes).slice(0, 5000),
-      done: raw.done === true || raw.done === 'true' || raw.done === 'TRUE' || raw.done === 1 || raw.done === '1',
+      done: done,
+      notDone: notDone,
+      postponed: asBool(raw.postponed),
       priority: PRIORITIES.indexOf(String(raw.priority)) >= 0 ? String(raw.priority) : 'normal',
       due: /^\d{4}-\d{2}-\d{2}$/.test(String(raw.due || '')) ? String(raw.due) : '',
       dueTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.dueTime || '')) ? String(raw.dueTime) : '',
@@ -231,7 +239,7 @@
 
   function stableKey(rec) {
     return JSON.stringify([
-      rec.id, rec.title, rec.notes, rec.done,
+      rec.id, rec.title, rec.notes, rec.done, rec.notDone, rec.postponed,
       rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
       rec.color, rec.icon, rec.subtasks, rec.photos
     ]);
@@ -276,7 +284,9 @@
   }
 
   function compareTasks(a, b) {
-    if (a.done !== b.done) return a.done ? 1 : -1;
+    var ra = a.done ? 2 : (a.notDone ? 1 : 0);
+    var rb = b.done ? 2 : (b.notDone ? 1 : 0);
+    if (ra !== rb) return ra - rb;
     var pa = a.priority === 'high' ? 0 : 1;
     var pb = b.priority === 'high' ? 0 : 1;
     if (pa !== pb) return pa - pb;

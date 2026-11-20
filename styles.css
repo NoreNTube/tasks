@@ -986,6 +986,104 @@ dialog.sheet[open] {
   height: 16px;
 }
 
+/* Действия на карточке: отложить срок и «не выполнено» */
+
+.task-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.task-action {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.task-action:hover {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+.task-action:active {
+  transform: scale(0.92);
+}
+
+.task-action[data-action="postpone"]:hover {
+  color: var(--warning);
+}
+
+.task-action[data-action="notdone"]:hover {
+  color: var(--danger);
+}
+
+.task.is-not-done {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
+}
+
+.meta-item.postponed {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.meta-item.not-done {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Плавающее меню «Отложить срок» */
+
+.postpone-menu {
+  position: fixed;
+  z-index: 55;
+  min-width: 168px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.postpone-menu-title {
+  padding: 6px 10px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.postpone-option {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.postpone-option:hover {
+  background: var(--bg-soft);
+  color: var(--accent-text);
+}
+
 .meta-item.subtasks.is-complete {
   color: var(--success);
   font-weight: 600;
@@ -1540,6 +1638,20 @@ dialog.lightbox::backdrop {
 
   .search {
     flex: 1 1 auto;
+  }
+
+  .task {
+    gap: 8px;
+    padding: 11px 12px;
+  }
+
+  .task-actions {
+    gap: 0;
+  }
+
+  .task-action {
+    width: 28px;
+    height: 28px;
   }
 
   .footer {

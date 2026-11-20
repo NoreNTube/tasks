@@ -25,7 +25,7 @@
  *
  *  Лист tasks:
  *    id | title | notes | done | priority | due | createdAt | updatedAt | deletedAt |
- *    color | icon | subtasks(JSON) | photos(JSON) | dueTime
+ *    color | icon | subtasks(JSON) | photos(JSON) | dueTime | postponed | notDone
  *
  *  Лист photos (файлы кусками base64, по 40 000 символов):
  *    id | taskId | createdAt | mime | width | height | size | chunkIndex | data
@@ -52,11 +52,11 @@ var CFG = {
   PHOTO_CHUNK: 40000,
   PHOTO_MAX_CHARS: 400000,
 
-  VERSION: 4
+  VERSION: 5
 };
 
 // Порядок колонок на листе. Менять не нужно.
-var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime'];
+var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime', 'postponed', 'notDone'];
 var PHOTO_COLUMNS = ['id', 'taskId', 'createdAt', 'mime', 'width', 'height', 'size', 'chunkIndex', 'data'];
 var COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'gray'];
 var ICONS = [
@@ -257,7 +257,7 @@ function ensureHeader_(sheet) {
   });
   if (matches) return;
 
-  // Лист, созданный старой версией (9 или 12 колонок): его заголовки —
+  // Лист, созданный старой версией (меньше колонок): его заголовки —
   // начало актуального списка. Дописываем только заголовки, данные не трогаем.
   var isPrefix = first.length < COLUMNS.length && first.every(function (column, index) {
     return column === COLUMNS[index];
@@ -331,7 +331,9 @@ function recordToRow_(rec) {
     rec.icon || '',
     rec.subtasks && rec.subtasks.length ? JSON.stringify(rec.subtasks) : '',
     rec.photos && rec.photos.length ? JSON.stringify(rec.photos) : '',
-    rec.dueTime || ''
+    rec.dueTime || '',
+    rec.postponed ? 'TRUE' : '',
+    rec.notDone ? 'TRUE' : ''
   ];
 }
 
@@ -386,7 +388,7 @@ function wins_(a, b) {
 
 function stableKey_(rec) {
   return JSON.stringify([
-    rec.id, rec.title, rec.notes, rec.done,
+    rec.id, rec.title, rec.notes, rec.done, rec.notDone, rec.postponed,
     rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
     rec.color, rec.icon, rec.subtasks, rec.photos
   ]);
@@ -395,6 +397,10 @@ function stableKey_(rec) {
 function numOrZero_(value) {
   var n = Number(value);
   return isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function bool_(value) {
+  return value === true || value === 'TRUE' || value === 'true' || value === 1 || value === '1';
 }
 
 function parseArray_(value) {
@@ -472,12 +478,15 @@ function normalize_(raw) {
 
   var createdAt = num(raw.createdAt) || Date.now();
   var due = String(raw.due == null ? '' : raw.due).trim();
+  var done = bool_(raw.done);
 
   return {
     id: id.slice(0, 100),
     title: String(raw.title == null ? '' : raw.title).trim().slice(0, 500),
     notes: String(raw.notes == null ? '' : raw.notes).slice(0, 5000),
-    done: raw.done === true || raw.done === 'TRUE' || raw.done === 'true' || raw.done === 1 || raw.done === '1',
+    done: done,
+    notDone: bool_(raw.notDone) && !done,
+    postponed: bool_(raw.postponed),
     priority: raw.priority === 'high' ? 'high' : 'normal',
     due: /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : '',
     dueTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.dueTime || '')) ? String(raw.dueTime) : '',

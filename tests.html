@@ -318,6 +318,35 @@
       });
 
 
+      test('normalize: postponed и notDone приводятся к boolean', function () {
+        var n = Store.normalize(rec({ postponed: 'TRUE', notDone: 1 }));
+        eq(n.postponed, true);
+        eq(n.notDone, true);
+        eq(Store.normalize(rec({})).postponed, false);
+        eq(Store.normalize(rec({})).notDone, false);
+      });
+
+      test('normalize: done и notDone не бывают одновременно', function () {
+        var n = Store.normalize(rec({ done: true, notDone: true }));
+        eq(n.done, true);
+        eq(n.notDone, false);
+      });
+
+      test('stableKey: postponed и notDone участвуют в сравнении', function () {
+        assert(Store.stableKey(rec({})) !== Store.stableKey(rec({ postponed: true })));
+        assert(Store.stableKey(rec({})) !== Store.stableKey(rec({ notDone: true })));
+      });
+
+      test('compareTasks: активные → не выполнено → выполнено', function () {
+        var sorted = [
+          rec({ id: 'done', done: true, createdAt: 1 }),
+          rec({ id: 'notDone', notDone: true, createdAt: 2 }),
+          rec({ id: 'active', createdAt: 3 })
+        ].sort(Store.compareTasks).map(function (task) { return task.id; });
+        eq(sorted.join(','), 'active,notDone,done');
+      });
+
+
       function render() {
         var passed = 0;
         var list = document.getElementById('results');

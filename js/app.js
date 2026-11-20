@@ -13,6 +13,15 @@
   var SYNC_INTERVAL = Math.max(20000, Number(CONFIG.syncIntervalMs) || 60000);
   var PUSH_DELAY = 900;
 
+  // Варианты быстрого переноса срока.
+  var POSTPONE_OPTIONS = [
+    { value: '1', label: '+1 день' },
+    { value: '3', label: '+3 дня' },
+    { value: '7', label: '+1 неделя' },
+    { value: '14', label: '+2 недели' },
+    { value: 'month', label: '+месяц' }
+  ];
+
   var els = {};
   var state = {
     tasks: [],
@@ -50,6 +59,10 @@
 
   // Защита от повторных загрузок миниатюр, пока фото ещё нет в локальном кэше.
   var thumbInflight = Object.create(null);
+
+  // Открытое меню «Отложить срок».
+  var postponeMenu = null;
+  var postponeAnchor = null;
 
   /* ------------------------------------------------------------------ */
   /*  Утилиты                                                            */
@@ -248,6 +261,7 @@
     els.counts = {
       all: document.querySelector('[data-count="all"]'),
       active: document.querySelector('[data-count="active"]'),
+      notDone: document.querySelector('[data-count="notDone"]'),
       done: document.querySelector('[data-count="done"]')
     };
     els.statusBtn = $('statusBtn');
@@ -307,6 +321,8 @@
       var action = target.getAttribute('data-action');
       if (action === 'toggle') toggleTask(id);
       else if (action === 'subtask-toggle') toggleSubtask(id, target.getAttribute('data-subtask-id'));
+      else if (action === 'postpone') openPostponeMenu(target, id);
+      else if (action === 'notdone') toggleNotDone(id);
       else if (action === 'edit') openTaskDialog(id);
     });
 
@@ -439,7 +455,8 @@
       .filter(function (task) { return !task.deletedAt; })
       .filter(function (task) {
         if (state.filter === 'done') return task.done;
-        if (state.filter === 'active') return !task.done;
+        if (state.filter === 'notDone') return task.notDone;
+        if (state.filter === 'active') return !task.done && !task.notDone;
         return true;
       })
       .filter(function (task) {
@@ -469,13 +486,14 @@
     if (state.query.trim()) return 'Ничего не найдено.';
     if (!hasAny) return 'Пока пусто. Добавьте первую задачу — она появится на всех устройствах.';
     if (state.filter === 'active') return 'Все задачи выполнены. Отдыхайте!';
+    if (state.filter === 'notDone') return 'Задач «не выполнено» пока нет.';
     if (state.filter === 'done') return 'Выполненных задач пока нет.';
     return 'Здесь появятся ваши задачи.';
   }
 
   function createTaskElement(task) {
     var li = document.createElement('li');
-    li.className = 'task' + (task.done ? ' is-done' : '');
+    li.className = 'task' + (task.done ? ' is-done' : '') + (task.notDone ? ' is-not-done' : '');
     li.setAttribute('data-id', task.id);
 
     var colorHex = task.color ? Store.colorHex(task.color) : '';
@@ -526,6 +544,20 @@
       meta.appendChild(due);
     }
 
+    if (task.postponed) {
+      var postponed = document.createElement('span');
+      postponed.className = 'meta-item postponed';
+      postponed.textContent = '⏳ отложено';
+      meta.appendChild(postponed);
+    }
+
+    if (task.notDone) {
+      var notDoneMeta = document.createElement('span');
+      notDoneMeta.className = 'meta-item not-done';
+      notDoneMeta.textContent = 'не выполнено';
+      meta.appendChild(notDoneMeta);
+    }
+
     if (task.priority === 'high') {
       var priority = document.createElement('span');
       priority.className = 'meta-item high';
@@ -569,6 +601,34 @@
       if (thumb) body.appendChild(thumb);
     }
 
+    var actions = null;
+    if (!task.done) {
+      actions = document.createElement('span');
+      actions.className = 'task-actions';
+
+      var postpone = document.createElement('button');
+      postpone.type = 'button';
+      postpone.className = 'task-action';
+      postpone.setAttribute('data-action', 'postpone');
+      postpone.setAttribute('aria-label', 'Отложить срок');
+      postpone.setAttribute('aria-haspopup', 'true');
+      postpone.title = 'Отложить срок';
+      postpone.textContent = '⏳';
+
+      var notDone = document.createElement('button');
+      notDone.type = 'button';
+      notDone.className = 'task-action';
+      notDone.setAttribute('data-action', 'notdone');
+      notDone.setAttribute('aria-pressed', task.notDone ? 'true' : 'false');
+      var notDoneLabel = task.notDone ? 'Вернуть в активные' : 'Отметить как не выполнено';
+      notDone.setAttribute('aria-label', notDoneLabel);
+      notDone.title = notDoneLabel;
+      notDone.textContent = '✕';
+
+      actions.appendChild(postpone);
+      actions.appendChild(notDone);
+    }
+
     var edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'task-edit';
@@ -579,6 +639,7 @@
 
     li.appendChild(check);
     li.appendChild(body);
+    if (actions) li.appendChild(actions);
     li.appendChild(edit);
     return li;
   }
@@ -739,19 +800,22 @@
 
   function countTasks() {
     var active = 0;
+    var notDone = 0;
     var done = 0;
     state.tasks.forEach(function (task) {
       if (task.deletedAt) return;
       if (task.done) done++;
+      else if (task.notDone) notDone++;
       else active++;
     });
-    return { active: active, done: done, all: active + done };
+    return { active: active, notDone: notDone, done: done, all: active + notDone + done };
   }
 
   function renderCounts() {
     var counts = countTasks();
     els.counts.all.textContent = String(counts.all);
     els.counts.active.textContent = String(counts.active);
+    if (els.counts.notDone) els.counts.notDone.textContent = String(counts.notDone);
     els.counts.done.textContent = String(counts.done);
 
     els.chips.forEach(function (chip) {
@@ -771,6 +835,9 @@
   function renderSummary() {
     var counts = countTasks();
     var parts = [counts.active + ' ' + plural(counts.active, 'активная', 'активные', 'активных')];
+    if (counts.notDone) {
+      parts.push(counts.notDone + ' ' + plural(counts.notDone, 'не выполнена', 'не выполнены', 'не выполнено'));
+    }
     if (counts.done) {
       parts.push(counts.done + ' ' + plural(counts.done, 'выполнена', 'выполнены', 'выполнено'));
     }
@@ -835,7 +902,7 @@
   }
 
   function setFilter(filter) {
-    if (['all', 'active', 'done'].indexOf(filter) === -1) return;
+    if (['all', 'active', 'notDone', 'done'].indexOf(filter) === -1) return;
     state.filter = filter;
     renderList();
     renderCounts();
@@ -967,6 +1034,8 @@
       title: title.slice(0, 500),
       notes: '',
       done: false,
+      notDone: false,
+      postponed: false,
       priority: 'normal',
       due: '',
       dueTime: '',
@@ -988,12 +1057,55 @@
       if (task.id !== id) return task;
       return Object.assign({}, task, {
         done: !task.done,
+        notDone: false,
+        postponed: false,
         updatedAt: nextTimestamp(task.updatedAt)
       });
     });
     persistTasks();
     renderAll();
     scheduleSync();
+  }
+
+  function toggleNotDone(id) {
+    var task = findTask(id);
+    if (!task) return;
+
+    var next = !task.notDone;
+    updateTask(id, { notDone: next, done: false });
+    showToast(next ? 'Отмечено как не выполнено' : 'Задача снова активна', 'ok');
+  }
+
+  function addDays(date, days) {
+    var result = new Date(date.getTime());
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  function addMonths(date, months) {
+    var day = date.getDate();
+    var result = new Date(date.getFullYear(), date.getMonth() + months, 1);
+    var lastDay = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+    result.setDate(Math.min(day, lastDay));
+    return result;
+  }
+
+  function postponeTask(id, days) {
+    var task = findTask(id);
+    if (!task) return;
+
+    // Считаем от сегодняшнего дня, но не «укорачиваем» срок, если он уже в будущем.
+    var base = startOfToday();
+    var dueDate = task.due ? parseDueDate(task.due) : null;
+    if (dueDate && dueDate.getTime() > base.getTime()) base = dueDate;
+
+    var target = days === 'month'
+      ? addMonths(base, 1)
+      : addDays(base, Math.max(1, Number(days) || 1));
+    var due = isoFromDate(target);
+
+    updateTask(id, { due: due, postponed: true });
+    showToast('Срок перенесён: ' + dueLabel(due, task.dueTime), 'ok');
   }
 
   function toggleSubtask(taskId, subtaskId) {
@@ -1025,6 +1137,92 @@
     persistTasks();
     renderAll();
     scheduleSync();
+  }
+
+  function closePostponeMenu() {
+    if (postponeMenu) {
+      if (postponeMenu.parentNode) postponeMenu.parentNode.removeChild(postponeMenu);
+      postponeMenu = null;
+    }
+    if (postponeAnchor) {
+      postponeAnchor.removeAttribute('aria-expanded');
+      postponeAnchor = null;
+    }
+    document.removeEventListener('click', onPostponeOutsideClick);
+    document.removeEventListener('keydown', onPostponeKeydown);
+    window.removeEventListener('resize', closePostponeMenu);
+  }
+
+  function onPostponeOutsideClick(event) {
+    if (postponeMenu && postponeMenu.contains(event.target)) return;
+    closePostponeMenu();
+  }
+
+  function onPostponeKeydown(event) {
+    if (event.key === 'Escape') closePostponeMenu();
+  }
+
+  function openPostponeMenu(anchor, taskId) {
+    if (postponeMenu && postponeAnchor === anchor) {
+      closePostponeMenu();
+      return;
+    }
+    closePostponeMenu();
+    if (!anchor || !findTask(taskId)) return;
+
+    var menu = document.createElement('div');
+    menu.className = 'postpone-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Отложить срок');
+
+    var title = document.createElement('div');
+    title.className = 'postpone-menu-title';
+    title.textContent = 'Отложить срок';
+    menu.appendChild(title);
+
+    POSTPONE_OPTIONS.forEach(function (option) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'postpone-option';
+      button.setAttribute('role', 'menuitem');
+      button.setAttribute('data-postpone', option.value);
+      button.textContent = option.label;
+      menu.appendChild(button);
+    });
+
+    menu.addEventListener('click', function (event) {
+      var option = event.target.closest ? event.target.closest('[data-postpone]') : null;
+      if (!option) return;
+      event.preventDefault();
+      var value = option.getAttribute('data-postpone');
+      closePostponeMenu();
+      postponeTask(taskId, value === 'month' ? 'month' : Number(value));
+    });
+
+    document.body.appendChild(menu);
+
+    var rect = anchor.getBoundingClientRect();
+    var menuRect = menu.getBoundingClientRect();
+    var left = rect.left + rect.width - menuRect.width;
+    left = Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8));
+    var top = rect.bottom + 6;
+    if (top + menuRect.height > window.innerHeight - 8) {
+      top = rect.top - menuRect.height - 6;
+    }
+    top = Math.max(8, top);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+
+    postponeMenu = menu;
+    postponeAnchor = anchor;
+    anchor.setAttribute('aria-expanded', 'true');
+
+    document.addEventListener('keydown', onPostponeKeydown);
+    window.addEventListener('resize', closePostponeMenu);
+    // Слушатель добавляем на следующем тике, чтобы текущий клик его не закрыл.
+    window.setTimeout(function () {
+      if (postponeMenu === menu) document.addEventListener('click', onPostponeOutsideClick);
+    }, 0);
   }
 
   function deleteTask(id) {
@@ -1289,6 +1487,8 @@
       title: '',
       notes: '',
       done: false,
+      notDone: false,
+      postponed: false,
       priority: 'normal',
       due: '',
       dueTime: '',
@@ -1322,11 +1522,14 @@
       await uploadEditorPhotos();
 
       var dueValue = els.editDue.value || '';
+      var previous = editor.mode === 'edit' ? findTask(editor.taskId) : null;
+      var dueChanged = !previous || previous.due !== dueValue;
       var patch = {
         title: title.slice(0, 500),
         notes: els.editNotes.value.trim().slice(0, 5000),
         due: dueValue,
         dueTime: dueValue ? (els.editDueTime.value || '') : '',
+        postponed: previous && !dueChanged ? Boolean(previous.postponed) : false,
         priority: els.editPriority.value === 'high' ? 'high' : 'normal',
         color: editor.color,
         icon: editor.icon,
