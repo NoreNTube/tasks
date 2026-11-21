@@ -19,6 +19,8 @@
     server_not_configured: 'В Code.gs не задан TOKEN — откройте таблицу и поправьте скрипт.',
     busy: 'Таблица занята другой синхронизацией. Попробуйте ещё раз.',
     too_many: 'Слишком много записей за один запрос.',
+    bad_login: 'Неверный логин или PIN/пароль.',
+    auth_required: 'Сессия истекла. Войдите заново.',
     bad_response: 'Google вернул не JSON. Проверьте, что веб-приложение развёрнуто с доступом «Все» (Anyone) и URL заканчивается на /exec.',
     network: 'Нет связи с Google. Проверьте интернет.',
     timeout: 'Превышено время ожидания ответа Google.'
@@ -148,21 +150,44 @@
     };
   }
 
-  async function pull(settings) {
+  async function login(settings, loginName, password) {
     var base = endpoint(settings);
-    var data = await get(base, { action: 'pull', token: settings.token });
-    return Array.isArray(data.items) ? data.items : [];
+    var data = await post(base, {
+      action: 'login',
+      token: settings.token,
+      login: loginName,
+      password: password
+    });
+    if (data && data.opaque) {
+      throw ApiError('bad_response', 'Google не вернул данные входа. Проверьте доступ «Все» (Anyone) и HTTPS.');
+    }
+    if (!data.token || !data.user) {
+      throw ApiError('bad_response', 'Вход не удался: сервер вернул неполные данные.');
+    }
+    return {
+      token: String(data.token),
+      user: data.user,
+      users: Array.isArray(data.users) ? data.users : []
+    };
   }
 
-  async function push(settings, items) {
+  async function pull(settings, session) {
     var base = endpoint(settings);
-    var data = await post(base, { action: 'sync', token: settings.token, items: items });
-    return data;
+    var data = await get(base, { action: 'getTasks', token: settings.token, session: session });
+    return {
+      items: Array.isArray(data.items) ? data.items : [],
+      users: Array.isArray(data.users) ? data.users : []
+    };
   }
 
-  async function photoSave(settings, photo) {
+  async function push(settings, session, items) {
     var base = endpoint(settings);
-    var data = await post(base, { action: 'photoSave', token: settings.token, photo: photo });
+    return post(base, { action: 'sync', token: settings.token, session: session, items: items });
+  }
+
+  async function photoSave(settings, session, photo) {
+    var base = endpoint(settings);
+    var data = await post(base, { action: 'photoSave', token: settings.token, session: session, photo: photo });
 
     if (data && data.ok === false) {
       throw ApiError('photo_save_failed', data.message || 'Не удалось сохранить фото.');
@@ -171,7 +196,7 @@
     if (data && data.opaque) {
       // Ответ POST не прочитался — убеждаемся отдельным запросом, что фото в таблице.
       await new Promise(function (resolve) { setTimeout(resolve, 400); });
-      var info = await photoInfo(settings, photo.id);
+      var info = await photoInfo(settings, session, photo.id);
       if (!info.exists) {
         throw ApiError('photo_save_failed', 'Фото не сохранилось в Google Таблице. Проверьте доступ «Все» и токен.');
       }
@@ -181,29 +206,30 @@
     return data;
   }
 
-  async function photoInfo(settings, id) {
+  async function photoInfo(settings, session, id) {
     var base = endpoint(settings);
-    var data = await get(base, { action: 'photoInfo', token: settings.token, id: id });
+    var data = await get(base, { action: 'photoInfo', token: settings.token, session: session, id: id });
     return { exists: Boolean(data.exists), chunks: Number(data.chunks) || 0 };
   }
 
-  async function photoGet(settings, id) {
+  async function photoGet(settings, session, id) {
     var base = endpoint(settings);
-    var data = await get(base, { action: 'photo', token: settings.token, id: id });
+    var data = await get(base, { action: 'photo', token: settings.token, session: session, id: id });
     if (!data.photo || !data.photo.data) {
       throw ApiError('photo_missing', 'Фото не найдено в Google Таблице.');
     }
     return data.photo;
   }
 
-  async function photoDelete(settings, ids) {
+  async function photoDelete(settings, session, ids) {
     var base = endpoint(settings);
-    return post(base, { action: 'photoDelete', token: settings.token, ids: ids });
+    return post(base, { action: 'photoDelete', token: settings.token, session: session, ids: ids });
   }
 
   global.AppApi = {
     ApiError: ApiError,
     ping: ping,
+    login: login,
     pull: pull,
     push: push,
     photoSave: photoSave,

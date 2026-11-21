@@ -26,6 +26,7 @@
   var state = {
     tasks: [],
     settings: Store.loadSettings(),
+    session: Store.loadSession(),
     filter: 'all',
     query: '',
     pendingPhotoCounts: {},
@@ -73,7 +74,36 @@
   }
 
   function isConfigured() {
+    return hasApiConfig() && isLoggedIn();
+  }
+
+  function hasApiConfig() {
     return Boolean(state.settings.apiUrl && state.settings.token);
+  }
+
+  function isLoggedIn() {
+    return Boolean(state.session && state.session.token && state.session.user);
+  }
+
+  function currentUser() {
+    return isLoggedIn() ? state.session.user : null;
+  }
+
+  function currentUserId() {
+    var user = currentUser();
+    return user ? user.id : '';
+  }
+
+  function userName(id) {
+    var key = String(id == null ? '' : id).trim();
+    if (!key) return '';
+    if (state.session && Array.isArray(state.session.users)) {
+      for (var i = 0; i < state.session.users.length; i++) {
+        if (state.session.users[i].id === key) return state.session.users[i].name;
+      }
+    }
+    if (currentUser() && currentUser().id === key) return currentUser().name;
+    return key;
   }
 
   function nextTimestamp(previous) {
@@ -237,20 +267,144 @@
     applyTheme(state.settings.theme);
     state.tasks = Store.loadTasks();
     bindEvents();
-    renderAll();
     registerServiceWorker();
+
+    if (!isLoggedIn()) {
+      showLoginView();
+      return;
+    }
+
+    showAppView();
     refreshPendingPhotoCounts();
+    startSyncEngine();
+  }
+
+  function startSyncEngine() {
+    if (state.intervalId) return;
+    state.intervalId = window.setInterval(function () {
+      if (document.visibilityState === 'visible') sync({ reason: 'timer' });
+    }, SYNC_INTERVAL);
 
     if (isConfigured()) {
       window.setTimeout(function () { sync({ reason: 'start' }); }, 400);
     }
+  }
 
-    state.intervalId = window.setInterval(function () {
-      if (document.visibilityState === 'visible') sync({ reason: 'timer' });
-    }, SYNC_INTERVAL);
+  function stopSyncEngine() {
+    if (state.intervalId) {
+      window.clearInterval(state.intervalId);
+      state.intervalId = null;
+    }
+    window.clearTimeout(state.pushTimer);
+  }
+
+  function showLoginView() {
+    if (els.loginView) els.loginView.hidden = false;
+    if (els.appView) els.appView.hidden = true;
+    if (els.loginForm) els.loginForm.reset();
+    if (els.loginHint) {
+      els.loginHint.className = 'hint';
+      els.loginHint.textContent = hasApiConfig()
+        ? 'Введите логин и PIN из листа Users.'
+        : 'Сначала настройте подключение к Google Таблице.';
+    }
+    window.setTimeout(function () {
+      if (els.loginName) els.loginName.focus();
+    }, 80);
+  }
+
+  function showAppView() {
+    if (els.loginView) els.loginView.hidden = true;
+    if (els.appView) els.appView.hidden = false;
+    var user = currentUser();
+    if (els.userChip) {
+      els.userChip.hidden = !user;
+      els.userChip.textContent = user ? user.name : '';
+    }
+    if (els.logoutBtn) els.logoutBtn.hidden = !user;
+    renderAll();
+  }
+
+  async function onLoginSubmit(event) {
+    event.preventDefault();
+    if (!els.loginSubmitBtn || els.loginSubmitBtn.disabled) return;
+
+    var login = els.loginName.value.trim();
+    var password = els.loginPassword.value;
+    if (!login || !password) {
+      setLoginHint('Введите логин и PIN/пароль.', true);
+      return;
+    }
+    if (!hasApiConfig()) {
+      setLoginHint('Сначала настройте URL и токен подключения.', true);
+      openSettingsDialog();
+      return;
+    }
+
+    els.loginSubmitBtn.disabled = true;
+    els.loginSubmitBtn.textContent = 'Входим…';
+    setLoginHint('Проверяем данные…');
+
+    try {
+      var session = await Api.login(state.settings, login, password);
+      state.session = Store.saveSession(session);
+      if (!state.session) throw new Error('Не удалось сохранить сессию на устройстве.');
+      els.loginPassword.value = '';
+
+      // На новом аккаунте не смешиваем локальные задачи прежнего пользователя.
+      state.tasks = [];
+      Store.saveTasks([]);
+      state.lastSyncAt = 0;
+      Store.updateMeta({ lastSyncAt: 0 });
+
+      showAppView();
+      startSyncEngine();
+      showToast('Вы вошли как ' + state.session.user.name, 'ok');
+    } catch (err) {
+      setLoginHint((err && err.message) || 'Не удалось войти.', true);
+    } finally {
+      els.loginSubmitBtn.disabled = false;
+      els.loginSubmitBtn.textContent = 'Войти';
+    }
+  }
+
+  function setLoginHint(message, isError) {
+    if (!els.loginHint) return;
+    els.loginHint.className = 'hint' + (isError ? ' is-error' : '');
+    els.loginHint.textContent = message;
+  }
+
+  function onLogoutClick() {
+    if (!window.confirm('Выйти из аккаунта? Задачи останутся в Google Таблице.')) return;
+    stopSyncEngine();
+    Store.clearSession();
+    state.session = null;
+    state.tasks = [];
+    Store.saveTasks([]);
+    state.lastSyncAt = 0;
+    Store.updateMeta({ lastSyncAt: 0 });
+    clearPendingPhotos();
+    showLoginView();
+  }
+
+  function clearPendingPhotos() {
+    Photos.listPending().then(function (records) {
+      return Photos.removeMany(records.map(function (record) { return record.id; }));
+    }).catch(function () {});
   }
 
   function cacheElements() {
+    els.loginView = $('loginView');
+    els.appView = $('appView');
+    els.loginForm = $('loginForm');
+    els.loginName = $('loginName');
+    els.loginPassword = $('loginPassword');
+    els.loginHint = $('loginHint');
+    els.loginSubmitBtn = $('loginSubmitBtn');
+    els.loginSetupBtn = $('loginSetupBtn');
+    els.userChip = $('userChip');
+    els.logoutBtn = $('logoutBtn');
+
     els.addForm = $('addForm');
     els.newTitle = $('newTitle');
     els.taskList = $('taskList');
@@ -262,7 +416,8 @@
       all: document.querySelector('[data-count="all"]'),
       active: document.querySelector('[data-count="active"]'),
       notDone: document.querySelector('[data-count="notDone"]'),
-      done: document.querySelector('[data-count="done"]')
+      done: document.querySelector('[data-count="done"]'),
+      delegated: document.querySelector('[data-count="delegated"]')
     };
     els.statusBtn = $('statusBtn');
     els.statusText = $('statusText');
@@ -281,6 +436,7 @@
     els.editDue = $('editDue');
     els.editDueTime = $('editDueTime');
     els.editPriority = $('editPriority');
+    els.editAssignedTo = $('editAssignedTo');
     els.editHint = $('editHint');
     els.deleteTaskBtn = $('deleteTaskBtn');
     els.editSaveBtn = $('editSaveBtn');
@@ -310,6 +466,10 @@
   }
 
   function bindEvents() {
+    if (els.loginForm) els.loginForm.addEventListener('submit', onLoginSubmit);
+    if (els.loginSetupBtn) els.loginSetupBtn.addEventListener('click', function () { openSettingsDialog(); });
+    if (els.logoutBtn) els.logoutBtn.addEventListener('click', onLogoutClick);
+
     els.addForm.addEventListener('submit', onAddSubmit);
 
     els.taskList.addEventListener('click', function (event) {
@@ -434,6 +594,15 @@
     } else if (event.key === Store.KEYS.meta) {
       state.lastSyncAt = Store.getMeta().lastSyncAt;
       renderSummary();
+    } else if (event.key === Store.KEYS.session) {
+      state.session = Store.loadSession();
+      if (!isLoggedIn()) {
+        stopSyncEngine();
+        showLoginView();
+      } else {
+        showAppView();
+        startSyncEngine();
+      }
     }
   }
 
@@ -457,6 +626,10 @@
         if (state.filter === 'done') return task.done;
         if (state.filter === 'notDone') return task.notDone;
         if (state.filter === 'active') return !task.done && !task.notDone;
+        if (state.filter === 'delegated') {
+          var me = currentUserId();
+          return Boolean(me) && task.createdBy === me && task.assignedTo !== me;
+        }
         return true;
       })
       .filter(function (task) {
@@ -488,6 +661,7 @@
     if (state.filter === 'active') return 'Все задачи выполнены. Отдыхайте!';
     if (state.filter === 'notDone') return 'Задач «не выполнено» пока нет.';
     if (state.filter === 'done') return 'Выполненных задач пока нет.';
+    if (state.filter === 'delegated') return 'Вы пока никому ничего не поручали.';
     return 'Здесь появятся ваши задачи.';
   }
 
@@ -563,6 +737,21 @@
       priority.className = 'meta-item high';
       priority.textContent = 'важное';
       meta.appendChild(priority);
+    }
+
+    // Кто поручил задачу мне и кому я поручил её сам.
+    var me = currentUserId();
+    if (task.createdBy && me && task.createdBy !== me) {
+      var fromMeta = document.createElement('span');
+      fromMeta.className = 'meta-item from';
+      fromMeta.textContent = 'от ' + userName(task.createdBy);
+      meta.appendChild(fromMeta);
+    }
+    if (task.assignedTo && task.assignedTo !== me) {
+      var toMeta = document.createElement('span');
+      toMeta.className = 'meta-item to';
+      toMeta.textContent = '→ ' + userName(task.assignedTo);
+      meta.appendChild(toMeta);
     }
 
     if (task.subtasks && task.subtasks.length) {
@@ -713,7 +902,7 @@
       if (thumbInflight[photo.id]) return thumbInflight[photo.id];
       if (!isConfigured() || !navigator.onLine) return '';
 
-      thumbInflight[photo.id] = Api.photoGet(state.settings, photo.id).then(function (result) {
+      thumbInflight[photo.id] = Api.photoGet(state.settings, state.session.token, photo.id).then(function (result) {
         var dataUrl = 'data:' + (result.mime || photo.mime || 'image/jpeg') + ';base64,' + result.data;
         return Photos.put({
           id: photo.id,
@@ -802,13 +991,16 @@
     var active = 0;
     var notDone = 0;
     var done = 0;
+    var delegated = 0;
+    var me = currentUserId();
     state.tasks.forEach(function (task) {
       if (task.deletedAt) return;
+      if (me && task.createdBy === me && task.assignedTo !== me) delegated++;
       if (task.done) done++;
       else if (task.notDone) notDone++;
       else active++;
     });
-    return { active: active, notDone: notDone, done: done, all: active + notDone + done };
+    return { active: active, notDone: notDone, done: done, delegated: delegated, all: active + notDone + done };
   }
 
   function renderCounts() {
@@ -817,6 +1009,7 @@
     els.counts.active.textContent = String(counts.active);
     if (els.counts.notDone) els.counts.notDone.textContent = String(counts.notDone);
     els.counts.done.textContent = String(counts.done);
+    if (els.counts.delegated) els.counts.delegated.textContent = String(counts.delegated);
 
     els.chips.forEach(function (chip) {
       chip.classList.toggle('is-active', chip.getAttribute('data-filter') === state.filter);
@@ -902,7 +1095,7 @@
   }
 
   function setFilter(filter) {
-    if (['all', 'active', 'notDone', 'done'].indexOf(filter) === -1) return;
+    if (['all', 'active', 'notDone', 'done', 'delegated'].indexOf(filter) === -1) return;
     state.filter = filter;
     renderList();
     renderCounts();
@@ -934,6 +1127,31 @@
     renderAll();
   }
 
+  function updateSessionUsers(users) {
+    if (!Array.isArray(users) || !users.length || !isLoggedIn()) return;
+    var normalized = Store.normalizeUsers(users);
+    if (!normalized.length) return;
+    state.session = Store.saveSession({
+      token: state.session.token,
+      user: state.session.user,
+      users: normalized
+    });
+  }
+
+  function handleSessionExpired() {
+    stopSyncEngine();
+    Store.clearSession();
+    state.session = null;
+    state.tasks = [];
+    state.syncKind = 'idle';
+    state.syncError = '';
+    Store.saveTasks([]);
+    Store.updateMeta({ lastSyncAt: 0 });
+    clearPendingPhotos();
+    showLoginView();
+    showToast('Сессия истекла. Войдите заново.', 'error');
+  }
+
   async function sync(options) {
     options = options || {};
 
@@ -958,22 +1176,26 @@
       // 0. Досылаем фотографии, которые ждут отправки.
       await flushPendingPhotos();
 
-      // 1. Забираем серверную версию и сливаем со своей.
-      var remote = await Api.pull(state.settings);
+      // 1. Забираем серверную версию (только задачи текущего пользователя).
+      var remote = await Api.pull(state.settings, state.session.token);
+      updateSessionUsers(remote.users);
 
-      var merged = Store.merge(state.tasks, remote);
+      var merged = Store.merge(state.tasks, remote.items);
       commitTasks(merged.items);
 
       // 2. Отправляем только то, что наше и новее серверного.
       if (merged.changed.length) {
-        var response = await Api.push(state.settings, merged.changed);
+        var response = await Api.push(state.settings, state.session.token, merged.changed);
 
         if (response && Array.isArray(response.items)) {
+          updateSessionUsers(response.users);
           commitTasks(Store.merge(state.tasks, response.items).items);
         } else {
           // Ответ POST не удалось прочитать (CORS) — проверяем результат обычным GET.
           await delay(700);
-          var verified = Store.merge(state.tasks, await Api.pull(state.settings));
+          var verifiedRemote = await Api.pull(state.settings, state.session.token);
+          updateSessionUsers(verifiedRemote.users);
+          var verified = Store.merge(state.tasks, verifiedRemote.items);
           commitTasks(verified.items);
           if (verified.changed.length) {
             throw new Error('Изменения не дошли до Google Таблицы. Проверьте доступ «Все» (Anyone) и токен.');
@@ -988,7 +1210,9 @@
       if (options.manual) showToast('Синхронизировано', 'ok');
     } catch (err) {
       var message = (err && err.message) || 'Не удалось синхронизировать';
-      if (err && err.code === 'not_configured') {
+      if (err && err.code === 'auth_required') {
+        handleSessionExpired();
+      } else if (err && err.code === 'not_configured') {
         setSyncKind('idle');
       } else {
         setSyncKind('error', message);
@@ -1043,6 +1267,8 @@
       icon: '',
       subtasks: [],
       photos: [],
+      createdBy: currentUserId(),
+      assignedTo: currentUserId(),
       createdAt: now,
       updatedAt: now,
       deletedAt: 0
@@ -1241,7 +1467,7 @@
     if (photoIds.length) {
       Photos.removeMany(photoIds);
       if (isConfigured()) {
-        Api.photoDelete(state.settings, photoIds).catch(function () {});
+        Api.photoDelete(state.settings, state.session.token, photoIds).catch(function () {});
       }
     }
 
@@ -1331,6 +1557,29 @@
     });
   }
 
+  function renderAssignedOptions(selected) {
+    if (!els.editAssignedTo) return;
+    els.editAssignedTo.textContent = '';
+
+    var me = currentUser();
+    var users = state.session && Array.isArray(state.session.users) ? state.session.users.slice() : [];
+    if (me && !users.some(function (user) { return user.id === me.id; })) {
+      users.unshift({ id: me.id, name: me.name });
+    }
+    if (!users.length) users.push({ id: '', name: 'Не назначено' });
+
+    var chosen = selected || (me ? me.id : '');
+    users.forEach(function (user) {
+      var option = document.createElement('option');
+      option.value = user.id;
+      option.textContent = user.name;
+      els.editAssignedTo.appendChild(option);
+    });
+
+    var exists = users.some(function (user) { return user.id === chosen; });
+    els.editAssignedTo.value = exists ? chosen : (users[0].id || '');
+  }
+
   async function openTaskDialog(taskId, prefillTitle) {
     var task = taskId ? findTask(taskId) : null;
     if (taskId && !task) return;
@@ -1343,6 +1592,7 @@
     editor.draftId = task ? task.id : Store.uid();
     editor.color = task ? task.color || '' : '';
     editor.icon = task ? task.icon || '' : '';
+    editor.assignedTo = task ? task.assignedTo || currentUserId() : currentUserId();
     editor.subtasks = task ? task.subtasks.map(function (item) {
       return { id: item.id, text: item.text, done: item.done };
     }) : [];
@@ -1372,6 +1622,8 @@
       els.editDueTime.value = '';
       els.editPriority.value = 'normal';
     }
+
+    renderAssignedOptions(editor.assignedTo);
 
     els.editHeading.textContent = task ? 'Задача' : 'Новая задача';
     els.editSaveBtn.textContent = task ? 'Сохранить' : 'Создать';
@@ -1470,7 +1722,7 @@
       if (!isConfigured() || !navigator.onLine) continue;
 
       try {
-        await Api.photoSave(state.settings, Photos.uploadPayload(record));
+        await Api.photoSave(state.settings, state.session.token, Photos.uploadPayload(record));
         await Photos.markUploaded(photo.id);
         photo.pending = false;
         editor.addedPhotoIds = editor.addedPhotoIds.filter(function (id) { return id !== photo.id; });
@@ -1496,6 +1748,8 @@
       icon: '',
       subtasks: [],
       photos: [],
+      createdBy: currentUserId(),
+      assignedTo: currentUserId(),
       createdAt: now,
       updatedAt: now,
       deletedAt: 0
@@ -1533,6 +1787,9 @@
         priority: els.editPriority.value === 'high' ? 'high' : 'normal',
         color: editor.color,
         icon: editor.icon,
+        createdBy: previous ? (previous.createdBy || currentUserId()) : currentUserId(),
+        assignedTo: (els.editAssignedTo && els.editAssignedTo.value) ||
+          (previous && previous.assignedTo) || currentUserId(),
         subtasks: normalizedSubtasksFromEditor(),
         photos: editorPhotosForSync()
       };
@@ -1547,7 +1804,7 @@
       editor.removedPhotos.forEach(function (id) {
         Photos.remove(id);
         if (isConfigured()) {
-          Api.photoDelete(state.settings, [id]).catch(function () {});
+          Api.photoDelete(state.settings, state.session.token, [id]).catch(function () {});
         }
       });
       editor.removedPhotos = [];
@@ -1727,7 +1984,7 @@
           return null;
         }
 
-        return Api.photoGet(state.settings, photo.id).then(function (result) {
+        return Api.photoGet(state.settings, state.session.token, photo.id).then(function (result) {
           if (generation !== editor.generation) return;
           photo.dataUrl = 'data:' + (result.mime || photo.mime || 'image/jpeg') + ';base64,' + result.data;
           photo.loading = false;
@@ -1825,7 +2082,7 @@
 
     if (!dataUrl && isConfigured() && navigator.onLine) {
       try {
-        var result = await Api.photoGet(state.settings, photo.id);
+        var result = await Api.photoGet(state.settings, state.session.token, photo.id);
         dataUrl = 'data:' + (result.mime || photo.mime || 'image/jpeg') + ';base64,' + result.data;
         await Photos.put({
           id: photo.id,
@@ -1869,7 +2126,7 @@
     for (var i = 0; i < records.length; i++) {
       var record = records[i];
       try {
-        await Api.photoSave(state.settings, Photos.uploadPayload(record));
+        await Api.photoSave(state.settings, state.session.token, Photos.uploadPayload(record));
         await Photos.markUploaded(record.id);
 
         var task = findTask(record.taskId);
@@ -1920,9 +2177,13 @@
     settingsAccent = state.settings.accent || 'blue';
     setSettingsAccent(settingsAccent, false);
     els.settingsHint.className = 'hint';
-    els.settingsHint.textContent = isConfigured()
-      ? 'Сейчас синхронизация включена. Изменения настроек применяются сразу после сохранения.'
-      : 'Настройки хранятся только в этом браузере. На телефоне их нужно ввести отдельно (или зашить в js/config.js).';
+    if (isConfigured()) {
+      els.settingsHint.textContent = 'Сейчас синхронизация включена. Изменения настроек применяются сразу после сохранения.';
+    } else if (hasApiConfig()) {
+      els.settingsHint.textContent = 'Подключение сохранено, но вход не выполнен. Введите логин и PIN из листа Users.';
+    } else {
+      els.settingsHint.textContent = 'Настройки хранятся только в этом браузере. На телефоне их нужно ввести отдельно (или зашить в js/config.js).';
+    }
     showDialog(els.settingsDialog);
   }
 
@@ -1988,6 +2249,14 @@
 
     if (isConfigured()) {
       sync({ reason: 'settings', manual: true });
+    } else if (!isLoggedIn()) {
+      if (els.loginHint) {
+        els.loginHint.className = 'hint';
+        els.loginHint.textContent = hasApiConfig()
+          ? 'Введите логин и PIN из листа Users.'
+          : 'Сначала настройте подключение к Google Таблице.';
+      }
+      showToast(hasApiConfig() ? 'Подключение сохранено. Войдите.' : 'Подключение отключено.', 'ok');
     } else {
       showToast('Синхронизация отключена. Задачи хранятся на устройстве.', 'ok');
     }

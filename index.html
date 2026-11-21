@@ -17,7 +17,39 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app">
+  <div id="loginView" class="login-view">
+    <div class="login-card">
+      <div class="login-brand">
+        <span class="logo login-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6L9 17l-5-5"></path>
+          </svg>
+        </span>
+        <div>
+          <h1>Задачи</h1>
+          <p>Вход для членов семьи</p>
+        </div>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="off">
+        <label class="field">
+          <span>Логин</span>
+          <input id="loginName" type="text" maxlength="100" placeholder="например, mama" autocomplete="username" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>Пароль или PIN</span>
+          <input id="loginPassword" type="password" maxlength="100" placeholder="PIN из листа Users" autocomplete="current-password">
+        </label>
+        <p id="loginHint" class="hint"></p>
+        <div class="sheet-actions">
+          <button type="button" id="loginSetupBtn" class="ghost-btn">Настроить синхронизацию</button>
+          <button type="submit" id="loginSubmitBtn" class="primary">Войти</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="app" id="appView" hidden>
 
     <header class="topbar">
       <div class="brand">
@@ -33,6 +65,8 @@
       </div>
 
       <div class="topbar-actions">
+        <span id="userChip" class="user-chip" title="Текущий пользователь" hidden></span>
+        <button id="logoutBtn" class="ghost-btn logout-btn" type="button" hidden>Выйти</button>
         <button id="statusBtn" class="status" type="button" title="Синхронизировать сейчас">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="statusText">…</span>
@@ -74,6 +108,7 @@
           <button class="chip" type="button" data-filter="active">Активные <span class="chip-count" data-count="active">0</span></button>
           <button class="chip" type="button" data-filter="notDone">Не выполнено <span class="chip-count" data-count="notDone">0</span></button>
           <button class="chip" type="button" data-filter="done">Готово <span class="chip-count" data-count="done">0</span></button>
+          <button class="chip" type="button" data-filter="delegated">Порученные мной <span class="chip-count" data-count="delegated">0</span></button>
         </div>
         <div class="search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -151,6 +186,11 @@
           </select>
         </label>
       </div>
+
+      <label class="field">
+        <span>Кому назначить</span>
+        <select id="editAssignedTo"></select>
+      </label>
 
       <div class="due-presets" role="group" aria-label="Быстрый выбор срока">
         <button type="button" data-due="today">Сегодня</button>

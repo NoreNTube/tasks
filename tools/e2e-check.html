@@ -106,11 +106,55 @@
         var win = frame.contentWindow;
         var doc = frame.contentDocument;
 
-        win.addEventListener('error', function (e) { errors.push(String(e.message)); });
-        win.addEventListener('unhandledrejection', function (e) { errors.push('rejection: ' + String(e.reason)); });
+        function watch(targetWin) {
+          targetWin.addEventListener('error', function (e) { errors.push(String(e.message)); });
+          targetWin.addEventListener('unhandledrejection', function (e) { errors.push('rejection: ' + String(e.reason)); });
+        }
+
+        function reload() {
+          return new Promise(function (resolve) {
+            frame.addEventListener('load', resolve, { once: true });
+            frame.contentWindow.location.reload();
+          });
+        }
+
+        watch(win);
 
         try {
+          // Чистое состояние: сначала должен открыться экран входа.
+          try {
+            win.localStorage.removeItem('tasksync.session.v1');
+            win.localStorage.removeItem('tasksync.tasks.v1');
+            win.localStorage.removeItem('tasksync.settings.v1');
+          } catch (cleanErr) { /* localStorage может быть недоступен */ }
+
+          await reload();
+          win = frame.contentWindow;
+          doc = frame.contentDocument;
+          watch(win);
+          await sleep(300);
+
+          eq('экран входа показан', doc.getElementById('loginView').hidden, false);
+          eq('приложение скрыто до входа', doc.getElementById('appView').hidden, true);
+          report('есть поля логина и PIN', !!(doc.getElementById('loginName') && doc.getElementById('loginPassword')));
+          report('есть кнопка настройки подключения', !!doc.getElementById('loginSetupBtn'));
+
+          // Засеваем сессию и перезагружаем: приложение открывается без сети.
+          win.localStorage.setItem('tasksync.session.v1', JSON.stringify({
+            token: 'e2e-session',
+            user: { id: 'u1', login: 'me', name: 'Я', role: 'admin' },
+            users: [{ id: 'u1', name: 'Я' }, { id: 'u2', name: 'Мама' }]
+          }));
+          await reload();
+          win = frame.contentWindow;
+          doc = frame.contentDocument;
+          watch(win);
           await sleep(400);
+
+          eq('после входа приложение показано', doc.getElementById('appView').hidden, false);
+          eq('экран входа скрыт', doc.getElementById('loginView').hidden, true);
+          eq('имя пользователя в шапке', doc.getElementById('userChip').textContent, 'Я');
+          eq('кнопка «Выйти» видна', doc.getElementById('logoutBtn').hidden, false);
 
           report('TasksApp доступен', !!win.TasksApp);
           eq('статус без настроек', doc.getElementById('statusText').textContent, 'Только это устройство');
@@ -444,6 +488,75 @@
           eq('акцент сохранён локально', savedSettings.accent, 'green');
           eq('тема сохранена локально', savedSettings.theme, 'dark');
           eq('акцент остался после сохранения', doc.documentElement.style.getPropertyValue('--accent'), '#22c55e');
+
+          // Делегирование задач
+          var delegateCard = findTask(doc, 'Позвонить маме и папе');
+          report('задача для делегирования найдена', !!delegateCard);
+          if (delegateCard) {
+            delegateCard.querySelector('.task-body').click();
+            await sleep(150);
+
+            var assigned = doc.getElementById('editAssignedTo');
+            report('есть выбор «Кому назначить»', !!assigned);
+            eq('по умолчанию выбран текущий пользователь', assigned.value, 'u1');
+            var hasMamaOption = Array.prototype.some.call(assigned.options, function (option) {
+              return option.value === 'u2' && option.textContent === 'Мама';
+            });
+            report('в списке есть другой член семьи', hasMamaOption);
+
+            assigned.value = 'u2';
+            doc.getElementById('editForm').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }));
+            await sleep(180);
+          }
+
+          var delegatedCard = findTask(doc, 'Позвонить маме и папе');
+          report('метка «→ Мама» на карточке', Boolean(delegatedCard && delegatedCard.querySelector('.meta-item.to')));
+
+          var delegatedChip = doc.querySelector('.chip[data-filter="delegated"]');
+          report('есть фильтр «Порученные мной»', !!delegatedChip);
+          if (delegatedChip) {
+            delegatedChip.click();
+            await sleep(80);
+            eq('фильтр «Порученные мной» показывает задачу', doc.querySelectorAll('#taskList .task').length, 1);
+            eq('счётчик порученных = 1', doc.querySelector('[data-count="delegated"]').textContent, '1');
+            doc.querySelector('.chip[data-filter="all"]').click();
+          }
+
+          // Задача, порученная мне другим членом семьи.
+          try {
+            var storedNow = JSON.parse(win.localStorage.getItem('tasksync.tasks.v1') || '[]');
+            storedNow.push({
+              id: 'e2e-incoming',
+              title: 'Купить торт',
+              notes: '',
+              done: false,
+              notDone: false,
+              postponed: false,
+              priority: 'normal',
+              due: '',
+              dueTime: '',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+              deletedAt: 0,
+              color: '',
+              icon: '',
+              subtasks: [],
+              photos: [],
+              createdBy: 'u2',
+              assignedTo: 'u1'
+            });
+            win.localStorage.setItem('tasksync.tasks.v1', JSON.stringify(storedNow));
+            await reload();
+            win = frame.contentWindow;
+            doc = frame.contentDocument;
+            watch(win);
+            await sleep(400);
+            var fromCard = findTask(doc, 'Купить торт');
+            report('видна задача от другого члена семьи', !!fromCard);
+            report('метка «от Мама»', Boolean(fromCard && fromCard.querySelector('.meta-item.from')));
+          } catch (incomingErr) {
+            report('проверка входящей задачи', false, String(incomingErr));
+          }
         } catch (err) {
           report('исключение в тесте', false, (err && err.message) || String(err));
         }

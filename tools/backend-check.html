@@ -80,7 +80,7 @@
         })
         .then(function (source) {
           var api = new Function(source +
-            '\nreturn { merge_: merge_, normalize_: normalize_, wins_: wins_, stableKey_: stableKey_, recordToRow_: recordToRow_, COLUMNS: COLUMNS };')();
+            '\nreturn { merge_: merge_, normalize_: normalize_, wins_: wins_, stableKey_: stableKey_, recordToRow_: recordToRow_, tasksForUser_: tasksForUser_, COLUMNS: COLUMNS, USER_COLUMNS: USER_COLUMNS };')();
 
           var merge = api.merge_;
           var normalize = api.normalize_;
@@ -147,15 +147,36 @@
           eq('normalize_: цвет вне палитры', normalize({ id: 'c2', color: 'rainbow' }).color, '');
           eq('normalize_: иконка', normalize({ id: 'i1', icon: '💰' }).icon, '💰');
           eq('normalize_: иконка вне набора', normalize({ id: 'i2', icon: '🚀' }).icon, '');
-          eq('COLUMNS: 16 колонок', api.COLUMNS.length, 16);
+          eq('COLUMNS: 18 колонок', api.COLUMNS.length, 18);
           eq('COLUMNS: icon после color', api.COLUMNS[10], 'icon');
           eq('COLUMNS: dueTime 14-я', api.COLUMNS[13], 'dueTime');
           eq('COLUMNS: postponed 15-я', api.COLUMNS[14], 'postponed');
           eq('COLUMNS: notDone 16-я', api.COLUMNS[15], 'notDone');
+          eq('COLUMNS: createdBy 17-я', api.COLUMNS[16], 'createdBy');
+          eq('COLUMNS: assignedTo 18-я', api.COLUMNS[17], 'assignedTo');
+          eq('USER_COLUMNS: 5 колонок', api.USER_COLUMNS.length, 5);
+          eq('USER_COLUMNS: password второй', api.USER_COLUMNS[2], 'password');
           eq('recordToRow_: иконка пишется в колонку', api.recordToRow_(normalize({ id: 'i3', icon: '📅' }))[10], '📅');
           eq('recordToRow_: время срока пишется в колонку', api.recordToRow_(normalize({ id: 't3', due: '2026-05-01', dueTime: '14:15' }))[13], '14:15');
           eq('recordToRow_: postponed пишется в колонку', api.recordToRow_(normalize({ id: 'p9', postponed: true }))[14], 'TRUE');
           eq('recordToRow_: notDone пишется в колонку', api.recordToRow_(normalize({ id: 'n9', notDone: true }))[15], 'TRUE');
+          eq('normalize_: createdBy обрезан', normalize({ id: 'o1', createdBy: '  u1 ' }).createdBy, 'u1');
+          eq('normalize_: assignedTo', normalize({ id: 'o2', assignedTo: 'u2' }).assignedTo, 'u2');
+          eq('normalize_: назначение по умолчанию пустое', normalize({ id: 'o3' }).assignedTo, '');
+          eq('recordToRow_: createdBy в 17-й колонке', api.recordToRow_(normalize({ id: 'o4', createdBy: 'u1' }))[16], 'u1');
+          eq('recordToRow_: assignedTo в 18-й колонке', api.recordToRow_(normalize({ id: 'o5', assignedTo: 'u2' }))[17], 'u2');
+          eq('stableKey_: назначение меняет ключ', api.stableKey_(normalize({ id: 'o6' })) !== api.stableKey_(normalize({ id: 'o6', assignedTo: 'u2' })), true);
+
+          var ownership = [
+            rec({ id: 'mine', createdBy: 'u1', assignedTo: 'u1' }),
+            rec({ id: 'delegated', createdBy: 'u1', assignedTo: 'u2' }),
+            rec({ id: 'incoming', createdBy: 'u2', assignedTo: 'u1' }),
+            rec({ id: 'foreign', createdBy: 'u2', assignedTo: 'u2' }),
+            rec({ id: 'legacy' })
+          ];
+          eq('tasksForUser_: свои и порученные', api.tasksForUser_(ownership, 'u1').map(function (r) { return r.id; }).join(','), 'mine,delegated,incoming');
+          eq('tasksForUser_: чужие скрыты', api.tasksForUser_(ownership, 'u2').map(function (r) { return r.id; }).join(','), 'delegated,incoming,foreign');
+          eq('tasksForUser_: без пользователя пусто', api.tasksForUser_(ownership, '').length, 0);
           eq('normalize_: postponed=TRUE', normalize({ id: 'x9', postponed: 'TRUE' }).postponed, true);
           eq('normalize_: notDone=1', normalize({ id: 'x10', notDone: 1 }).notDone, true);
           eq('normalize_: done снимает notDone', normalize({ id: 'x11', done: true, notDone: true }).notDone, false);

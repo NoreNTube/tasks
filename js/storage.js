@@ -8,7 +8,8 @@
   var KEYS = {
     tasks: 'tasksync.tasks.v1',
     meta: 'tasksync.meta.v1',
-    settings: 'tasksync.settings.v1'
+    settings: 'tasksync.settings.v1',
+    session: 'tasksync.session.v1'
   };
 
   var DEFAULT_SETTINGS = {
@@ -231,6 +232,8 @@
       icon: ICON_KEYS.indexOf(String(raw.icon || '')) >= 0 ? String(raw.icon) : '',
       subtasks: normalizeSubtasks(raw.subtasks),
       photos: normalizePhotos(raw.photos),
+      createdBy: String(raw.createdBy == null ? '' : raw.createdBy).trim().slice(0, 100),
+      assignedTo: String(raw.assignedTo == null ? '' : raw.assignedTo).trim().slice(0, 100),
       createdAt: createdAt,
       updatedAt: num(raw.updatedAt) || createdAt,
       deletedAt: num(raw.deletedAt)
@@ -241,7 +244,7 @@
     return JSON.stringify([
       rec.id, rec.title, rec.notes, rec.done, rec.notDone, rec.postponed,
       rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
-      rec.color, rec.icon, rec.subtasks, rec.photos
+      rec.color, rec.icon, rec.subtasks, rec.photos, rec.createdBy, rec.assignedTo
     ]);
   }
 
@@ -323,6 +326,62 @@
     return meta;
   }
 
+  function normalizeUsers(list) {
+    var seen = {};
+    var result = [];
+    (Array.isArray(list) ? list : []).forEach(function (item) {
+      if (!item) return;
+      var id = String(item.id == null ? '' : item.id).trim();
+      if (!id || seen[id]) return;
+      seen[id] = true;
+      result.push({
+        id: id.slice(0, 100),
+        name: String(item.name || item.login || id).trim().slice(0, 100) || id
+      });
+    });
+    return result;
+  }
+
+  function normalizeSession(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var token = String(raw.token == null ? '' : raw.token).trim();
+    var user = raw.user && typeof raw.user === 'object' ? raw.user : null;
+    if (!token || !user) return null;
+    var id = String(user.id == null ? '' : user.id).trim();
+    if (!id) return null;
+    var login = String(user.login == null ? '' : user.login).trim();
+    var name = String(user.name || login || id).trim() || id;
+    return {
+      token: token,
+      user: {
+        id: id.slice(0, 100),
+        login: login.slice(0, 100),
+        name: name.slice(0, 100),
+        role: user.role === 'admin' ? 'admin' : 'member'
+      },
+      users: normalizeUsers(raw.users)
+    };
+  }
+
+  function loadSession() {
+    return normalizeSession(read(KEYS.session, null));
+  }
+
+  function saveSession(session) {
+    var normalized = normalizeSession(session);
+    if (!normalized) return null;
+    write(KEYS.session, normalized);
+    return normalized;
+  }
+
+  function clearSession() {
+    try {
+      global.localStorage.removeItem(KEYS.session);
+    } catch (err) {
+      console.warn('[storage] Не удалось очистить сессию', err);
+    }
+  }
+
   function resolveAccent(value, fallback) {
     var key = String(value == null ? '' : value);
     if (ACCENT_KEYS.indexOf(key) >= 0) return key;
@@ -380,6 +439,11 @@
     getMeta: getMeta,
     updateMeta: updateMeta,
     loadSettings: loadSettings,
-    saveSettings: saveSettings
+    saveSettings: saveSettings,
+    normalizeUsers: normalizeUsers,
+    normalizeSession: normalizeSession,
+    loadSession: loadSession,
+    saveSession: saveSession,
+    clearSession: clearSession
   };
 })(window);

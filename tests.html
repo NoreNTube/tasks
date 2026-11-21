@@ -347,6 +347,42 @@
       });
 
 
+      test('normalize: createdBy и assignedTo сохраняются', function () {
+        var n = Store.normalize(rec({ createdBy: '  u1 ', assignedTo: 'u2' }));
+        eq(n.createdBy, 'u1');
+        eq(n.assignedTo, 'u2');
+        eq(Store.normalize(rec({})).createdBy, '');
+        eq(Store.normalize(rec({})).assignedTo, '');
+      });
+
+      test('stableKey: назначение участвует в сравнении', function () {
+        assert(Store.stableKey(rec({})) !== Store.stableKey(rec({ assignedTo: 'u2' })));
+        assert(Store.stableKey(rec({})) !== Store.stableKey(rec({ createdBy: 'u1' })));
+      });
+
+      test('normalizeSession: без токена или пользователя — null', function () {
+        eq(Store.normalizeSession(null), null);
+        eq(Store.normalizeSession({ token: 't' }), null);
+        eq(Store.normalizeSession({ user: { id: 'u1' } }), null);
+      });
+
+      test('normalizeSession: пользователи без паролей и дублей', function () {
+        var session = Store.normalizeSession({
+          token: ' tok ',
+          user: { id: 'u1', login: 'me', name: 'Я', role: 'admin' },
+          users: [
+            { id: 'u1', name: 'Я', password: 'secret' },
+            { id: 'u2', name: 'Мама' },
+            { id: 'u2', name: 'Дубль' }
+          ]
+        });
+        eq(session.token, 'tok');
+        eq(session.user.role, 'admin');
+        eq(session.users.length, 2);
+        eq(session.users[1].name, 'Мама');
+        eq(session.users[0].password, undefined);
+      });
+
       function render() {
         var passed = 0;
         var list = document.getElementById('results');

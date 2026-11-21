@@ -15,17 +15,23 @@
  *   6. Этот URL и токен вставьте в приложении в «Настройках» (шестерёнка).
  *
  *  API (всё через JSON):
- *    GET  ?action=ping&token=...            → { ok, count, serverTime }
- *    GET  ?action=pull&token=...            → { ok, items: [...] }
- *    POST { action:"sync", token, items }   → { ok, items: [...] }  // LWW-мерж
- *    POST { action:"photoSave", token, photo }
- *    GET  ?action=photo&token=...&id=...    → { ok, photo:{...,data} }
- *    GET  ?action=photoInfo&token=...&id=...→ { ok, exists, chunks }
- *    POST { action:"photoDelete", token, ids }
+ *    GET  ?action=ping&token=...                    → { ok, count, serverTime }
+ *    POST { action:"login", token, login, password } → { ok, token(сессия), user, users }
+ *    GET  ?action=getTasks&token=...&session=...     → { ok, items:[свои], users }
+ *    POST { action:"sync", token, session, items }   → { ok, items:[свои], changed }
+ *    POST { action:"photoSave", token, session, photo }
+ *    GET  ?action=photo&token=...&session=...&id=... → { ok, photo:{...,data} }
+ *    GET  ?action=photoInfo&token=...&session=...&id=...→ { ok, exists, chunks }
+ *    POST { action:"photoDelete", token, session, ids }
+ *
+ *  Лист Users (семейные профили):
+ *    id | login | password | name | role
+ *    Пароли/PIN хранятся открытым текстом — доступ к таблице и есть защита.
  *
  *  Лист tasks:
  *    id | title | notes | done | priority | due | createdAt | updatedAt | deletedAt |
- *    color | icon | subtasks(JSON) | photos(JSON) | dueTime | postponed | notDone
+ *    color | icon | subtasks(JSON) | photos(JSON) | dueTime | postponed | notDone |
+ *    createdBy | assignedTo
  *
  *  Лист photos (файлы кусками base64, по 40 000 символов):
  *    id | taskId | createdAt | mime | width | height | size | chunkIndex | data
@@ -40,6 +46,10 @@ var CFG = {
   // Имя листа внутри таблицы.
   SHEET_NAME: 'tasks',
 
+  // Лист семейных профилей и время жизни сессии (в секундах).
+  USERS_SHEET: 'Users',
+  SESSION_TTL: 43200, // 12 часов
+
   // Если скрипт создан НЕ внутри таблицы (не через «Расширения»),
   // впишите сюда ID таблицы из её URL: /spreadsheets/d/<ID>/edit
   SPREADSHEET_ID: '',
@@ -52,11 +62,12 @@ var CFG = {
   PHOTO_CHUNK: 40000,
   PHOTO_MAX_CHARS: 400000,
 
-  VERSION: 5
+  VERSION: 6
 };
 
 // Порядок колонок на листе. Менять не нужно.
-var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime', 'postponed', 'notDone'];
+var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime', 'postponed', 'notDone', 'createdBy', 'assignedTo'];
+var USER_COLUMNS = ['id', 'login', 'password', 'name', 'role'];
 var PHOTO_COLUMNS = ['id', 'taskId', 'createdAt', 'mime', 'width', 'height', 'size', 'chunkIndex', 'data'];
 var COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'gray'];
 var ICONS = [
@@ -89,7 +100,8 @@ function handle_(e) {
       return json_({ ok: false, error: 'unauthorized', message: 'Неверный токен доступа.' });
     }
 
-    var action = String(payload.action || params.action || 'pull');
+    var action = String(payload.action || params.action || 'getTasks');
+    var session = String(payload.session || params.session || '');
 
     if (action === 'ping') {
       var all = readAll_();
@@ -103,19 +115,27 @@ function handle_(e) {
       });
     }
 
-    if (action === 'pull') {
-      return json_({ ok: true, items: readAll_(), serverTime: Date.now(), version: CFG.VERSION });
+    if (action === 'login') {
+      return login_(payload, params);
     }
 
+    if (action === 'getTasks' || action === 'pull') {
+      return getTasks_(session);
+    }
+
+    // Фотографии доступны только вошедшим пользователям.
     if (action === 'photoSave') {
+      if (!resolveUserId_(session)) return authRequired_();
       return photoSave_(payload.photo);
     }
 
     if (action === 'photo' || action === 'photoGet') {
+      if (!resolveUserId_(session)) return authRequired_();
       return json_({ ok: true, photo: photoGet_(payload.id || params.id) });
     }
 
     if (action === 'photoInfo') {
+      if (!resolveUserId_(session)) return authRequired_();
       var photoInfo = photoInfo_(payload.id || params.id);
       return json_({
         ok: true,
@@ -126,10 +146,14 @@ function handle_(e) {
     }
 
     if (action === 'photoDelete') {
+      if (!resolveUserId_(session)) return authRequired_();
       return photoDelete_(payload.ids);
     }
 
     if (action === 'sync') {
+      var userId = resolveUserId_(session);
+      if (!userId) return authRequired_();
+
       var items = Array.isArray(payload.items) ? payload.items : [];
       if (items.length > CFG.MAX_ITEMS) {
         return json_({ ok: false, error: 'too_many', message: 'Слишком много записей за один запрос.' });
@@ -140,12 +164,19 @@ function handle_(e) {
         return json_({ ok: false, error: 'busy', message: 'Таблица занята другой синхронизацией.' });
       }
       try {
-        var merged = merge_(readAll_(), items);
-        if (merged.changed > 0) writeAll_(merged.items);
+        var serverTasks = readUserTasks_(userId);
+        var validIds = validUserIds_();
+        var prepared = items.map(function (raw) {
+          return prepareIncoming_(raw, userId, serverTasks, validIds);
+        }).filter(Boolean);
+        var merged = merge_(serverTasks, prepared);
+        // Пишем только строки текущего пользователя, не трогая чужие задачи.
+        if (merged.changed > 0) upsertTasks_(merged.items);
         return json_({
           ok: true,
           items: merged.items,
           changed: merged.changed,
+          users: publicUsers_(),
           serverTime: Date.now(),
           version: CFG.VERSION
         });
@@ -162,6 +193,293 @@ function handle_(e) {
       message: String((err && err.message) || err)
     });
   }
+}
+
+/* --------------------------------------------------------------------------
+ *  Пользователи, вход и сессии
+ * ------------------------------------------------------------------------ */
+
+function authRequired_() {
+  return json_({ ok: false, error: 'auth_required', message: 'Сессия истекла. Войдите заново.' });
+}
+
+/**
+ * Вход по логину и PIN/паролю из листа Users.
+ * Возвращает сессионный токен, данные пользователя и список пользователей
+ * (только id и name — без паролей) для выпадающего списка назначения.
+ */
+function login_(payload, params) {
+  var login = String(payload.login || (params && params.login) || '').trim();
+  var password = String(payload.password || (params && params.password) || '');
+
+  if (!login || !password) {
+    return json_({ ok: false, error: 'bad_login', message: 'Введите логин и PIN/пароль.' });
+  }
+
+  var user = findUserByLogin_(login);
+  if (!user || String(user.password) !== password) {
+    return json_({ ok: false, error: 'bad_login', message: 'Неверный логин или PIN/пароль.' });
+  }
+
+  // Первый успешный вход дополняет старые задачи владельцем (обычно админ),
+  // чтобы они не пропали после включения фильтра по пользователю.
+  try {
+    ensureOwnershipBackfill_();
+  } catch (err) {
+    Logger.log('Не удалось перенести старые задачи: %s', err);
+  }
+
+  var session = createSession_(user.id);
+  return json_({
+    ok: true,
+    action: 'login',
+    token: session,
+    user: publicUser_(user),
+    users: publicUsers_(),
+    serverTime: Date.now(),
+    version: CFG.VERSION
+  });
+}
+
+/** Задачи, видимые пользователю: назначенные ему или созданные им. */
+function getTasks_(session) {
+  var userId = resolveUserId_(session);
+  if (!userId) return authRequired_();
+  return json_({
+    ok: true,
+    action: 'getTasks',
+    items: readUserTasks_(userId),
+    users: publicUsers_(),
+    serverTime: Date.now(),
+    version: CFG.VERSION
+  });
+}
+
+function createSession_(userId) {
+  var key = Utilities.getUuid();
+  CacheService.getScriptCache().put('session:' + key, String(userId), CFG.SESSION_TTL);
+  return key;
+}
+
+function resolveUserId_(session) {
+  var key = String(session || '').trim();
+  if (!key) return '';
+  try {
+    var userId = CacheService.getScriptCache().get('session:' + key);
+    return userId ? String(userId) : '';
+  } catch (err) {
+    return '';
+  }
+}
+
+function tasksForUser_(items, userId) {
+  var id = String(userId == null ? '' : userId).trim();
+  if (!id) return [];
+  return (items || []).filter(function (task) {
+    if (!task) return false;
+    return String(task.assignedTo || '').trim() === id ||
+      String(task.createdBy || '').trim() === id;
+  });
+}
+
+function readUserTasks_(userId) {
+  return tasksForUser_(readAll_(), userId);
+}
+
+/**
+ * Готовит входящую задачу к записи: createdBy при создании ставит сервер,
+ * assignedTo проверяется по списку пользователей. createdBy существующей
+ * задачи не перезаписывается.
+ */
+function prepareIncoming_(raw, userId, serverTasks, validIds) {
+  var rec = normalize_(raw);
+  if (!rec) return null;
+
+  var existing = null;
+  for (var i = 0; i < serverTasks.length; i++) {
+    if (serverTasks[i].id === rec.id) {
+      existing = serverTasks[i];
+      break;
+    }
+  }
+
+  var allowed = validIds || {};
+  if (existing) {
+    rec.createdBy = existing.createdBy || userId;
+    if (!rec.assignedTo || !allowed[rec.assignedTo]) {
+      rec.assignedTo = existing.assignedTo || userId;
+    }
+  } else {
+    rec.createdBy = userId;
+    if (!rec.assignedTo || !allowed[rec.assignedTo]) {
+      rec.assignedTo = userId;
+    }
+  }
+  return rec;
+}
+
+/**
+ * Построчно обновляет или добавляет задачи, не стирая чужие строки.
+ * Возвращает количество записанных записей.
+ */
+function upsertTasks_(records) {
+  var list = (records || []).filter(function (rec) { return rec && rec.id; });
+  if (!list.length) return 0;
+
+  var sheet = getSheet_();
+  var lastRow = sheet.getLastRow();
+  var rows = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, COLUMNS.length).getValues() : [];
+
+  var rowById = {};
+  for (var i = 0; i < rows.length; i++) {
+    var id = String(rows[i][0] == null ? '' : rows[i][0]).trim();
+    if (id) rowById[id] = i + 2;
+  }
+
+  var toAppend = [];
+  var written = 0;
+
+  list.forEach(function (rec) {
+    var values = recordToRow_(rec);
+    var rowNumber = rowById[rec.id];
+    if (rowNumber > 0) {
+      sheet.getRange(rowNumber, 1, 1, COLUMNS.length).setValues([values]);
+      written++;
+    } else if (rowNumber === undefined) {
+      toAppend.push(values);
+      rowById[rec.id] = -1; // защита от дублей в одном пакете
+      written++;
+    }
+  });
+
+  if (toAppend.length) {
+    var startRow = Math.max(sheet.getLastRow() + 1, 2);
+    sheet.getRange(startRow, 1, toAppend.length, COLUMNS.length).setValues(toAppend);
+  }
+  return written;
+}
+
+/* --------------------------------------------------------------------------
+ *  Лист Users
+ * ------------------------------------------------------------------------ */
+
+function getUsersSheet_() {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(CFG.USERS_SHEET);
+  if (!sheet) sheet = ss.insertSheet(CFG.USERS_SHEET);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, USER_COLUMNS.length).setValues([USER_COLUMNS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+
+  var lastColumn = Math.max(sheet.getLastColumn(), 1);
+  var first = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(function (cell) {
+    return String(cell == null ? '' : cell).trim();
+  });
+  while (first.length && first[first.length - 1] === '') first.pop();
+
+  var matches = first.length === USER_COLUMNS.length && USER_COLUMNS.every(function (column, index) {
+    return first[index] === column;
+  });
+  if (matches) return sheet;
+
+  var isPrefix = first.length < USER_COLUMNS.length && first.every(function (column, index) {
+    return column === USER_COLUMNS[index];
+  });
+  if (isPrefix) {
+    sheet.getRange(1, 1, 1, USER_COLUMNS.length).setValues([USER_COLUMNS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+
+  throw new Error(
+    'На листе «' + CFG.USERS_SHEET + '» ожидаются заголовки: ' + USER_COLUMNS.join(', ') + '.'
+  );
+}
+
+function readUsers_() {
+  var sheet = getUsersSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  var values = sheet.getRange(2, 1, lastRow - 1, USER_COLUMNS.length).getDisplayValues();
+  var users = [];
+
+  values.forEach(function (row) {
+    var id = String(row[0] == null ? '' : row[0]).trim();
+    var login = String(row[1] == null ? '' : row[1]).trim();
+    if (!id && !login) return;
+    if (!id) id = login;
+    var name = String(row[3] == null ? '' : row[3]).trim();
+    users.push({
+      id: id.slice(0, 100),
+      login: login.slice(0, 100),
+      password: String(row[2] == null ? '' : row[2]),
+      name: (name || login || id).slice(0, 100),
+      role: String(row[4] == null ? '' : row[4]).trim().toLowerCase() === 'admin' ? 'admin' : 'member'
+    });
+  });
+
+  return users;
+}
+
+function publicUser_(user) {
+  return { id: user.id, login: user.login, name: user.name, role: user.role };
+}
+
+/** Список для выпадающего списка: только id и name, без паролей. */
+function publicUsers_() {
+  return readUsers_().map(function (user) {
+    return { id: user.id, name: user.name };
+  });
+}
+
+function validUserIds_() {
+  var map = {};
+  readUsers_().forEach(function (user) { map[user.id] = true; });
+  return map;
+}
+
+function findUserByLogin_(login) {
+  var key = String(login == null ? '' : login).trim().toLowerCase();
+  if (!key) return null;
+  var users = readUsers_();
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].login.toLowerCase() === key) return users[i];
+  }
+  return null;
+}
+
+function firstOwnerId_() {
+  var users = readUsers_();
+  if (!users.length) return '';
+  for (var i = 0; i < users.length; i++) {
+    if (users[i].role === 'admin') return users[i].id;
+  }
+  return users[0].id;
+}
+
+/**
+ * Разово назначает старые задачи (без createdBy/assignedTo) первому админу.
+ * Возвращает число обновлённых задач.
+ */
+function ensureOwnershipBackfill_() {
+  var legacy = readAll_().filter(function (task) {
+    return !task.createdBy && !task.assignedTo;
+  });
+  if (!legacy.length) return 0;
+
+  var owner = firstOwnerId_();
+  if (!owner) return 0;
+
+  legacy.forEach(function (task) {
+    task.createdBy = owner;
+    task.assignedTo = owner;
+  });
+  upsertTasks_(legacy);
+  return legacy.length;
 }
 
 function json_(obj) {
@@ -333,7 +651,9 @@ function recordToRow_(rec) {
     rec.photos && rec.photos.length ? JSON.stringify(rec.photos) : '',
     rec.dueTime || '',
     rec.postponed ? 'TRUE' : '',
-    rec.notDone ? 'TRUE' : ''
+    rec.notDone ? 'TRUE' : '',
+    rec.createdBy || '',
+    rec.assignedTo || ''
   ];
 }
 
@@ -390,7 +710,7 @@ function stableKey_(rec) {
   return JSON.stringify([
     rec.id, rec.title, rec.notes, rec.done, rec.notDone, rec.postponed,
     rec.priority, rec.due, rec.dueTime, rec.createdAt, rec.updatedAt, rec.deletedAt,
-    rec.color, rec.icon, rec.subtasks, rec.photos
+    rec.color, rec.icon, rec.subtasks, rec.photos, rec.createdBy, rec.assignedTo
   ]);
 }
 
@@ -494,6 +814,8 @@ function normalize_(raw) {
     icon: ICONS.indexOf(String(raw.icon || '')) >= 0 ? String(raw.icon) : '',
     subtasks: normalizeSubtasks_(raw.subtasks),
     photos: normalizePhotos_(raw.photos),
+    createdBy: String(raw.createdBy == null ? '' : raw.createdBy).trim().slice(0, 100),
+    assignedTo: String(raw.assignedTo == null ? '' : raw.assignedTo).trim().slice(0, 100),
     createdAt: createdAt,
     updatedAt: num(raw.updatedAt) || createdAt,
     deletedAt: num(raw.deletedAt)
@@ -700,17 +1022,25 @@ function selfTest() {
     result.items.length, result.changed, result.items[1].title);
   Logger.log('Активных на листе: %s', countActive_(readAll_()));
   Logger.log('Строк на листе photos: %s', getPhotosSheet_().getLastRow());
+  Logger.log('Пользователей на листе Users: %s', readUsers_().length);
   Logger.log('Токен задан: %s', CFG.TOKEN !== 'CHANGE_ME_на_длинный_секрет');
 }
 
 /**
- * Создаёт листы tasks и photos с заголовками, если их ещё нет.
+ * Создаёт листы tasks, Users и photos с заголовками, если их ещё нет,
+ * и назначает старые задачи первому администратору.
  */
 function setupSheet() {
   var tasks = getSheet_();
+  var users = getUsersSheet_();
   var photos = getPhotosSheet_();
-  Logger.log('Готово. Лист «%s», строк: %s; лист «%s», строк: %s',
-    tasks.getName(), tasks.getLastRow(), photos.getName(), photos.getLastRow());
+  var migrated = ensureOwnershipBackfill_();
+  Logger.log('Готово. Лист «%s», строк: %s; лист «%s», строк: %s; лист «%s», строк: %s; перенесено задач: %s',
+    tasks.getName(), tasks.getLastRow(), users.getName(), users.getLastRow(),
+    photos.getName(), photos.getLastRow(), migrated);
+  if (users.getLastRow() < 2) {
+    Logger.log('Добавьте пользователей на лист Users: id | login | password | name | role');
+  }
 }
 
 /**
