@@ -336,7 +336,9 @@
       seen[id] = true;
       result.push({
         id: id.slice(0, 100),
-        name: String(item.name || item.login || id).trim().slice(0, 100) || id
+        name: String(item.name || item.login || id).trim().slice(0, 100) || id,
+        telegramChatId: String(item.telegramChatId == null ? '' : item.telegramChatId).trim().slice(0, 100),
+        telegramUsername: String(item.telegramUsername == null ? '' : item.telegramUsername).trim().replace(/^@/, '').slice(0, 100)
       });
     });
     return result;
@@ -357,7 +359,9 @@
         id: id.slice(0, 100),
         login: login.slice(0, 100),
         name: name.slice(0, 100),
-        role: user.role === 'admin' ? 'admin' : 'member'
+        role: user.role === 'admin' ? 'admin' : 'member',
+        telegramChatId: String(user.telegramChatId == null ? '' : user.telegramChatId).trim().slice(0, 100),
+        telegramUsername: String(user.telegramUsername == null ? '' : user.telegramUsername).trim().replace(/^@/, '').slice(0, 100)
       },
       users: normalizeUsers(raw.users)
     };

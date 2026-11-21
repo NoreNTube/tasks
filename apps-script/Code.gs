@@ -25,8 +25,10 @@
  *    POST { action:"photoDelete", token, session, ids }
  *
  *  Лист Users (семейные профили):
- *    id | login | password | name | role
+ *    id | login | password | name | role | telegramChatId | telegramUsername
  *    Пароли/PIN хранятся открытым текстом — доступ к таблице и есть защита.
+ *    Токен Telegram-бота лежит НЕ в коде, а в «Свойствах скрипта» под ключом
+ *    TELEGRAM_BOT_TOKEN (Проект → Настройки → Свойства скрипта).
  *
  *  Лист tasks:
  *    id | title | notes | done | priority | due | createdAt | updatedAt | deletedAt |
@@ -67,7 +69,7 @@ var CFG = {
 
 // Порядок колонок на листе. Менять не нужно.
 var COLUMNS = ['id', 'title', 'notes', 'done', 'priority', 'due', 'createdAt', 'updatedAt', 'deletedAt', 'color', 'icon', 'subtasks', 'photos', 'dueTime', 'postponed', 'notDone', 'createdBy', 'assignedTo'];
-var USER_COLUMNS = ['id', 'login', 'password', 'name', 'role'];
+var USER_COLUMNS = ['id', 'login', 'password', 'name', 'role', 'telegramChatId', 'telegramUsername'];
 var PHOTO_COLUMNS = ['id', 'taskId', 'createdAt', 'mime', 'width', 'height', 'size', 'chunkIndex', 'data'];
 var COLORS = ['blue', 'green', 'yellow', 'orange', 'red', 'purple', 'pink', 'gray'];
 var ICONS = [
@@ -91,6 +93,13 @@ function handle_(e) {
   try {
     var params = (e && e.parameter) || {};
     var payload = readPayload_(e, params);
+
+    // Telegram присылает апдейты (JSON с update_id/message) без нашего токена,
+    // поэтому webhook обрабатываем до проверки CFG.TOKEN.
+    if (isTelegramUpdate_(payload)) {
+      return handleTelegramUpdate_(payload);
+    }
+
     var token = String(payload.token || params.token || '');
 
     if (!CFG.TOKEN || CFG.TOKEN === 'CHANGE_ME_на_длинный_секрет') {
@@ -172,6 +181,8 @@ function handle_(e) {
         var merged = merge_(serverTasks, prepared);
         // Пишем только строки текущего пользователя, не трогая чужие задачи.
         if (merged.changed > 0) upsertTasks_(merged.items);
+        // Уведомления шлём после сохранения: ошибка Telegram не должна ломать задачу.
+        if (merged.changed > 0) notifyTaskAssignments_(serverTasks, prepared);
         return json_({
           ok: true,
           items: merged.items,
@@ -434,7 +445,9 @@ function readUsers_() {
       login: login.slice(0, 100),
       password: String(row[2] == null ? '' : row[2]),
       name: (name || login || id).slice(0, 100),
-      role: String(row[4] == null ? '' : row[4]).trim().toLowerCase() === 'admin' ? 'admin' : 'member'
+      role: String(row[4] == null ? '' : row[4]).trim().toLowerCase() === 'admin' ? 'admin' : 'member',
+      telegramChatId: String(row[5] == null ? '' : row[5]).trim().slice(0, 100),
+      telegramUsername: String(row[6] == null ? '' : row[6]).trim().replace(/^@/, '').slice(0, 100)
     });
   });
 
@@ -442,13 +455,25 @@ function readUsers_() {
 }
 
 function publicUser_(user) {
-  return { id: user.id, login: user.login, name: user.name, role: user.role };
+  return {
+    id: user.id,
+    login: user.login,
+    name: user.name,
+    role: user.role,
+    telegramChatId: user.telegramChatId || '',
+    telegramUsername: user.telegramUsername || ''
+  };
 }
 
-/** Список для выпадающего списка: только id и name, без паролей. */
+/** Список для выпадающего списка и шапки: без паролей, но со статусом Telegram. */
 function publicUsers_() {
   return readUsers_().map(function (user) {
-    return { id: user.id, name: user.name };
+    return {
+      id: user.id,
+      name: user.name,
+      telegramChatId: user.telegramChatId || '',
+      telegramUsername: user.telegramUsername || ''
+    };
   });
 }
 
@@ -468,6 +493,16 @@ function findUserByLogin_(login) {
   // Если в колонке login пусто (или ввели id), разрешаем вход по идентификатору.
   for (var j = 0; j < users.length; j++) {
     if (String(users[j].id).toLowerCase() === key) return users[j];
+  }
+  return null;
+}
+
+function findUserById_(id) {
+  var key = String(id == null ? '' : id).trim().toLowerCase();
+  if (!key) return null;
+  var users = readUsers_();
+  for (var i = 0; i < users.length; i++) {
+    if (String(users[i].id).toLowerCase() === key) return users[i];
   }
   return null;
 }
@@ -1024,6 +1059,240 @@ function photoDelete_(ids) {
 }
 
 /* --------------------------------------------------------------------------
+ *  Telegram: уведомления о задачах и привязка чата
+ *  Токен бота НЕ хранится в коде: он лежит в «Свойствах скрипта»
+ *  (Проект → Настройки → Свойства скрипта) под ключом TELEGRAM_BOT_TOKEN.
+ * ------------------------------------------------------------------------ */
+
+var TELEGRAM_API = 'https://api.telegram.org/bot';
+
+function getTelegramToken_() {
+  try {
+    var token = PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN');
+    return String(token || '').trim();
+  } catch (err) {
+    Logger.log('Не удалось прочитать TELEGRAM_BOT_TOKEN: %s', err);
+    return '';
+  }
+}
+
+/** Тело запроса — апдейт от Telegram, а не вызов нашего JSON API. */
+function isTelegramUpdate_(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  return payload.update_id != null || (payload.message && typeof payload.message === 'object');
+}
+
+/** Экранирует текст для parse_mode:"HTML". */
+function telegramEscape_(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/** Текст уведомления о новой/переназначенной задаче (чистая функция для тестов). */
+function telegramTaskMessage_(task, senderName, kind) {
+  var rec = task || {};
+  var sender = String(senderName == null ? '' : senderName).trim() || 'члена семьи';
+  var due = String(rec.due == null ? '' : rec.due).trim();
+  var dueTime = String(rec.dueTime == null ? '' : rec.dueTime).trim();
+  var dueText = due ? (dueTime ? due + ' ' + dueTime : due) : 'Без срока';
+  var title = String(rec.title == null ? '' : rec.title).trim() || 'Без названия';
+  var headline = kind === 'reassigned'
+    ? '🔁 <b>Задача переназначена на вас — от ' + telegramEscape_(sender) + '</b>'
+    : '📌 <b>Новая задача от ' + telegramEscape_(sender) + '</b>';
+
+  return [
+    headline,
+    '📝 <b>Задача:</b> ' + telegramEscape_(title),
+    '⏰ <b>Срок:</b> ' + telegramEscape_(dueText)
+  ].join('\n');
+}
+
+function sendTelegramMessage_(chatId, text) {
+  var id = String(chatId == null ? '' : chatId).trim();
+  if (!id || !text) return false;
+
+  var token = getTelegramToken_();
+  if (!token) {
+    Logger.log('Telegram: TELEGRAM_BOT_TOKEN не задан — сообщение не отправлено.');
+    return false;
+  }
+
+  try {
+    var response = UrlFetchApp.fetch(TELEGRAM_API + token + '/sendMessage', {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({
+        chat_id: id,
+        text: String(text),
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      }),
+      muteHttpExceptions: true
+    });
+    var code = response.getResponseCode();
+    if (code !== 200) Logger.log('Telegram sendMessage (%s): %s', code, response.getContentText());
+    return code === 200;
+  } catch (err) {
+    // Ошибка Telegram не должна ломать сохранение задачи.
+    Logger.log('Telegram sendMessage ошибка: %s', err);
+    return false;
+  }
+}
+
+/** Шлёт уведомление получателю задачи, если он привязал Telegram и это не он сам. */
+function sendTelegramTaskNotification_(task, kind) {
+  if (!task) return false;
+  var assignedTo = String(task.assignedTo == null ? '' : task.assignedTo).trim();
+  var createdBy = String(task.createdBy == null ? '' : task.createdBy).trim();
+  if (!assignedTo) return false;
+  if (assignedTo === createdBy) return false; // самому себе не шлём
+
+  var receiver = findUserById_(assignedTo);
+  if (!receiver || !receiver.telegramChatId) return false;
+
+  var sender = findUserById_(createdBy);
+  var senderName = sender ? sender.name : createdBy;
+  return sendTelegramMessage_(receiver.telegramChatId, telegramTaskMessage_(task, senderName, kind));
+}
+
+/**
+ * Сравнивает серверные задачи с пришедшими и шлёт уведомления о новых
+ * задачах и о смене исполнителя. Устаревшие записи (проигравшие merge) пропускает.
+ */
+function notifyTaskAssignments_(serverTasks, incoming) {
+  var base = Array.isArray(serverTasks) ? serverTasks : [];
+  var list = Array.isArray(incoming) ? incoming : [];
+
+  list.forEach(function (rec) {
+    if (!rec || !rec.id) return;
+
+    var existing = null;
+    for (var i = 0; i < base.length; i++) {
+      if (base[i].id === rec.id) { existing = base[i]; break; }
+    }
+    if (existing && !wins_(rec, existing)) return;
+
+    var isNew = !existing;
+    var reassigned = Boolean(existing) &&
+      String(existing.assignedTo || '').trim() !== String(rec.assignedTo || '').trim();
+    if (!isNew && !reassigned) return;
+
+    sendTelegramTaskNotification_(rec, isNew ? 'new' : 'reassigned');
+  });
+}
+
+/** Пишет telegramChatId/username в лист Users для указанного пользователя. */
+function bindTelegramChat_(user, chatId, username) {
+  var id = String(chatId == null ? '' : chatId).trim().slice(0, 100);
+  if (!user || !id) return false;
+
+  var sheet = getUsersSheet_();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return false;
+
+  var chatColumn = USER_COLUMNS.indexOf('telegramChatId') + 1;
+  var nameColumn = USER_COLUMNS.indexOf('telegramUsername') + 1;
+  var rows = sheet.getRange(2, 1, lastRow - 1, USER_COLUMNS.length).getDisplayValues();
+  var wantedLogin = String(user.login || '').toLowerCase();
+
+  for (var i = 0; i < rows.length; i++) {
+    var rowId = String(rows[i][0] == null ? '' : rows[i][0]).trim();
+    var rowLogin = String(rows[i][1] == null ? '' : rows[i][1]).trim().toLowerCase();
+    if (rowId !== user.id && rowLogin !== wantedLogin) continue;
+
+    var row = i + 2;
+    sheet.getRange(row, chatColumn).setNumberFormat('@').setValue(id);
+    if (nameColumn > 0) {
+      var uname = String(username == null ? '' : username).trim().replace(/^@/, '').slice(0, 100);
+      sheet.getRange(row, nameColumn).setNumberFormat('@').setValue(uname);
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Обрабатывает входящий апдейт Telegram (webhook /start <login>). */
+function handleTelegramUpdate_(update) {
+  try {
+    var message = (update && update.message) || null;
+    if (!message) return json_({ ok: true });
+
+    var chat = message.chat || {};
+    var chatId = chat.id;
+    if (chatId == null) return json_({ ok: true });
+
+    var text = String(message.text == null ? '' : message.text).trim();
+    var startMatch = /^\/start(?:@\w+)?(?:\s+([\s\S]+))?$/i.exec(text);
+    if (!startMatch) {
+      sendTelegramMessage_(chatId, 'Напишите /start &lt;login&gt;, например /start gleb, чтобы подключить уведомления.');
+      return json_({ ok: true });
+    }
+
+    var login = String(startMatch[1] || '').trim().split(/\s+/)[0];
+    if (!login) {
+      sendTelegramMessage_(chatId, 'Укажите логин: /start &lt;login&gt;, например /start gleb.');
+      return json_({ ok: true });
+    }
+
+    var user = findUserByLogin_(login);
+    if (!user) {
+      sendTelegramMessage_(chatId,
+        'Не удалось найти пользователя с логином «' + telegramEscape_(login) + '». ' +
+        'Проверьте колонку login на листе Users.');
+      return json_({ ok: true });
+    }
+
+    bindTelegramChat_(user, chatId, chat.username || '');
+    sendTelegramMessage_(chatId,
+      '✅ Привет, ' + telegramEscape_(user.name) + '! Уведомления о новых задачах подключены');
+    return json_({ ok: true });
+  } catch (err) {
+    Logger.log('handleTelegramUpdate_ ошибка: %s', err);
+    return json_({ ok: true });
+  }
+}
+
+/**
+ * Привязывает URL веб-приложения к Telegram (Webhook).
+ * Запустите вручную из редактора Apps Script один раз после развёртывания.
+ */
+function setTelegramWebhook() {
+  var token = getTelegramToken_();
+  if (!token) {
+    Logger.log('Сначала добавьте TELEGRAM_BOT_TOKEN в «Свойства скрипта».');
+    return;
+  }
+  var url = ScriptApp.getService().getUrl();
+  if (!url) {
+    Logger.log('Не удалось получить URL веб-приложения. Разверните его как «Веб-приложение».');
+    return;
+  }
+  var response = UrlFetchApp.fetch(TELEGRAM_API + token + '/setWebhook', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ url: url, allowed_updates: ['message'] }),
+    muteHttpExceptions: true
+  });
+  Logger.log('setWebhook → %s: %s', response.getResponseCode(), response.getContentText());
+}
+
+/** Удаляет webhook (для отладки). Запускается вручную. */
+function deleteTelegramWebhook() {
+  var token = getTelegramToken_();
+  if (!token) {
+    Logger.log('Сначала добавьте TELEGRAM_BOT_TOKEN в «Свойства скрипта».');
+    return;
+  }
+  var response = UrlFetchApp.fetch(TELEGRAM_API + token + '/deleteWebhook', {
+    method: 'post',
+    muteHttpExceptions: true
+  });
+  Logger.log('deleteWebhook → %s: %s', response.getResponseCode(), response.getContentText());
+}
+
+/* --------------------------------------------------------------------------
  *  Обслуживание (запускается вручную из редактора Apps Script)
  * ------------------------------------------------------------------------ */
 
@@ -1044,6 +1313,7 @@ function selfTest() {
   Logger.log('Строк на листе photos: %s', getPhotosSheet_().getLastRow());
   Logger.log('Пользователей на листе Users: %s', readUsers_().length);
   Logger.log('Токен задан: %s', CFG.TOKEN !== 'CHANGE_ME_на_длинный_секрет');
+  Logger.log('Telegram-бот настроен: %s', Boolean(getTelegramToken_()));
 }
 
 /**
@@ -1083,8 +1353,9 @@ function debugUsers() {
     var users = readUsers_();
     Logger.log('readUsers_ прочитал пользователей: %s', users.length);
     users.forEach(function (user, i) {
-      Logger.log('  #%s id=%s login=%s name=%s role=%s passwordLength=%s',
-        i + 1, user.id, user.login, user.name, user.role, String(user.password).length);
+      Logger.log('  #%s id=%s login=%s name=%s role=%s passwordLength=%s telegramChatId=%s',
+        i + 1, user.id, user.login, user.name, user.role, String(user.password).length,
+        user.telegramChatId || '(не привязан)');
     });
   } catch (err) {
     Logger.log('readUsers_ ошибка: %s', err);

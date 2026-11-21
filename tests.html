@@ -383,6 +383,18 @@
         eq(session.users[0].password, undefined);
       });
 
+      test('normalizeSession: сохраняет привязку Telegram', function () {
+        var session = Store.normalizeSession({
+          token: 't',
+          user: { id: 'u1', login: 'me', name: 'Я', telegramChatId: '12345', telegramUsername: '@me_bot' },
+          users: [{ id: 'u2', name: 'Мама', telegramChatId: '67890', telegramUsername: 'mama' }]
+        });
+        eq(session.user.telegramChatId, '12345');
+        eq(session.user.telegramUsername, 'me_bot');
+        eq(session.users[0].telegramChatId, '67890');
+        eq(session.users[0].telegramUsername, 'mama');
+      });
+
       function render() {
         var passed = 0;
         var list = document.getElementById('results');

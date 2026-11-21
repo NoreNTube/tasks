@@ -1784,6 +1784,12 @@ html[data-session="1"] #loginView {
   padding: 7px 11px;
 }
 
+.telegram-connect {
+  padding: 7px 11px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 /* Метки назначения в карточке задачи. */
 .meta-item.from {
   color: var(--warning);

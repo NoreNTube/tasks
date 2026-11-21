@@ -80,7 +80,7 @@
         })
         .then(function (source) {
           var api = new Function(source +
-            '\nreturn { merge_: merge_, normalize_: normalize_, wins_: wins_, stableKey_: stableKey_, recordToRow_: recordToRow_, tasksForUser_: tasksForUser_, COLUMNS: COLUMNS, USER_COLUMNS: USER_COLUMNS };')();
+            '\nreturn { merge_: merge_, normalize_: normalize_, wins_: wins_, stableKey_: stableKey_, recordToRow_: recordToRow_, tasksForUser_: tasksForUser_, telegramTaskMessage_: telegramTaskMessage_, telegramEscape_: telegramEscape_, COLUMNS: COLUMNS, USER_COLUMNS: USER_COLUMNS };')();
 
           var merge = api.merge_;
           var normalize = api.normalize_;
@@ -154,8 +154,10 @@
           eq('COLUMNS: notDone 16-я', api.COLUMNS[15], 'notDone');
           eq('COLUMNS: createdBy 17-я', api.COLUMNS[16], 'createdBy');
           eq('COLUMNS: assignedTo 18-я', api.COLUMNS[17], 'assignedTo');
-          eq('USER_COLUMNS: 5 колонок', api.USER_COLUMNS.length, 5);
+          eq('USER_COLUMNS: 7 колонок', api.USER_COLUMNS.length, 7);
           eq('USER_COLUMNS: password второй', api.USER_COLUMNS[2], 'password');
+          eq('USER_COLUMNS: telegramChatId 6-я', api.USER_COLUMNS[5], 'telegramChatId');
+          eq('USER_COLUMNS: telegramUsername 7-я', api.USER_COLUMNS[6], 'telegramUsername');
           eq('recordToRow_: иконка пишется в колонку', api.recordToRow_(normalize({ id: 'i3', icon: '📅' }))[10], '📅');
           eq('recordToRow_: время срока пишется в колонку', api.recordToRow_(normalize({ id: 't3', due: '2026-05-01', dueTime: '14:15' }))[13], '14:15');
           eq('recordToRow_: postponed пишется в колонку', api.recordToRow_(normalize({ id: 'p9', postponed: true }))[14], 'TRUE');
@@ -206,6 +208,19 @@
 
           var sub = merge([], [rec({ subtasks: [{ id: 's1', text: 'Шаг', done: true }] })]);
           eq('merge_: подзадачи сохранены', sub.items[0].subtasks[0].text, 'Шаг');
+
+          var msgNew = api.telegramTaskMessage_(
+            { title: 'Купить <молоко>', due: '2026-05-01', dueTime: '09:30' }, 'Мама', 'new');
+          eq('telegram: заголовок «Новая задача»', msgNew.indexOf('Новая задача от Мама') >= 0, true);
+          eq('telegram: задача экранирована', msgNew.indexOf('&lt;молоко&gt;') >= 0, true);
+          eq('telegram: срок с временем', msgNew.indexOf('2026-05-01 09:30') >= 0, true);
+
+          var msgNoDue = api.telegramTaskMessage_({ title: 'Позвонить' }, 'Папа', 'new');
+          eq('telegram: без срока', msgNoDue.indexOf('Без срока') >= 0, true);
+
+          var msgRe = api.telegramTaskMessage_({ title: 'X', due: '2026-06-01' }, 'Бабушка', 'reassigned');
+          eq('telegram: переназначение', msgRe.indexOf('переназначена') >= 0, true);
+          eq('telegram: экранирование &', api.telegramEscape_('a & b < c'), 'a &amp; b &lt; c');
 
           eq('merge_: пустые входы', merge(null, null).items.length, 0);
 

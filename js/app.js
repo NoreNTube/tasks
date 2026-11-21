@@ -106,6 +106,46 @@
     return key;
   }
 
+  /**
+   * Кнопка «Подключить Telegram»: показываем, только если у пользователя ещё
+   * нет telegramChatId и в config.js задан telegramBotUsername.
+   */
+  function renderTelegramLink() {
+    var link = els.telegramConnect;
+    if (!link) return;
+
+    var botUsername = String(CONFIG.telegramBotUsername || '').replace(/^@/, '').trim();
+    var user = currentUser();
+    if (!user || !botUsername) {
+      link.hidden = true;
+      return;
+    }
+
+    var chatId = String(user.telegramChatId || '').trim();
+    if (!chatId && state.session && Array.isArray(state.session.users)) {
+      for (var i = 0; i < state.session.users.length; i++) {
+        if (state.session.users[i].id === user.id) {
+          chatId = String(state.session.users[i].telegramChatId || '').trim();
+          break;
+        }
+      }
+    }
+    if (chatId) {
+      link.hidden = true;
+      return;
+    }
+
+    var login = String(user.login || '').trim();
+    if (!login) {
+      link.hidden = true;
+      return;
+    }
+
+    link.href = 'https://t.me/' + encodeURIComponent(botUsername) + '?start=' + encodeURIComponent(login);
+    link.hidden = false;
+    link.textContent = 'Подключить Telegram';
+  }
+
   function nextTimestamp(previous) {
     return Math.max(Date.now(), (Number(previous) || 0) + 1);
   }
@@ -324,6 +364,7 @@
       els.userChip.textContent = user ? user.name : '';
     }
     if (els.logoutBtn) els.logoutBtn.hidden = !user;
+    renderTelegramLink();
     renderAll();
   }
 
@@ -405,6 +446,7 @@
     els.loginSubmitBtn = $('loginSubmitBtn');
     els.loginSetupBtn = $('loginSetupBtn');
     els.userChip = $('userChip');
+    els.telegramConnect = $('telegramConnect');
     els.logoutBtn = $('logoutBtn');
 
     els.addForm = $('addForm');
@@ -1138,6 +1180,7 @@
       user: state.session.user,
       users: normalized
     });
+    renderTelegramLink();
   }
 
   function handleSessionExpired() {
