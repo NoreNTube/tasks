@@ -553,7 +553,8 @@
             await sleep(400);
             var fromCard = findTask(doc, 'Купить торт');
             report('видна задача от другого члена семьи', !!fromCard);
-            report('метка «от Мама»', Boolean(fromCard && fromCard.querySelector('.meta-item.from')));
+            var fromLabel = fromCard ? fromCard.querySelector('.meta-item.from') : null;
+            report('метка «От: Мама»', Boolean(fromLabel && fromLabel.textContent.indexOf('Мама') !== -1));
           } catch (incomingErr) {
             report('проверка входящей задачи', false, String(incomingErr));
           }

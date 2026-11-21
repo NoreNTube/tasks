@@ -744,7 +744,7 @@
     if (task.createdBy && me && task.createdBy !== me) {
       var fromMeta = document.createElement('span');
       fromMeta.className = 'meta-item from';
-      fromMeta.textContent = 'от ' + userName(task.createdBy);
+      fromMeta.textContent = 'От: ' + userName(task.createdBy);
       meta.appendChild(fromMeta);
     }
     if (task.assignedTo && task.assignedTo !== me) {
