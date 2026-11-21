@@ -299,6 +299,7 @@
   }
 
   function showLoginView() {
+    document.documentElement.removeAttribute('data-session');
     if (els.loginView) els.loginView.hidden = false;
     if (els.appView) els.appView.hidden = true;
     if (els.loginForm) els.loginForm.reset();
@@ -314,6 +315,7 @@
   }
 
   function showAppView() {
+    document.documentElement.setAttribute('data-session', '1');
     if (els.loginView) els.loginView.hidden = true;
     if (els.appView) els.appView.hidden = false;
     var user = currentUser();

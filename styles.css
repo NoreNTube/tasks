@@ -1699,6 +1699,10 @@ dialog.lightbox::backdrop {
 
 /* ---------- Вход ---------- */
 
+html[data-session="1"] #loginView {
+  display: none;
+}
+
 .login-view {
   display: grid;
   place-items: center;

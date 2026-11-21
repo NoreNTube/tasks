@@ -15,6 +15,14 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
+  <script>
+    // До отрисовки: если сессия уже сохранена, экран входа не показываем.
+    try {
+      if (window.localStorage.getItem('tasksync.session.v1')) {
+        document.documentElement.setAttribute('data-session', '1');
+      }
+    } catch (err) { /* localStorage может быть недоступен */ }
+  </script>
 </head>
 <body>
   <div id="loginView" class="login-view">
