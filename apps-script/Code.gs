@@ -336,6 +336,11 @@ function upsertTasks_(records) {
     if (id) rowById[id] = i + 2;
   }
 
+  // Все значения храним как текст: даты и «TRUE» не превращаются в типы Sheets.
+  if (lastRow >= 2) {
+    sheet.getRange(2, 1, lastRow - 1, COLUMNS.length).setNumberFormat('@');
+  }
+
   var toAppend = [];
   var written = 0;
 
@@ -354,7 +359,9 @@ function upsertTasks_(records) {
 
   if (toAppend.length) {
     var startRow = Math.max(sheet.getLastRow() + 1, 2);
-    sheet.getRange(startRow, 1, toAppend.length, COLUMNS.length).setValues(toAppend);
+    var appendRange = sheet.getRange(startRow, 1, toAppend.length, COLUMNS.length);
+    appendRange.setNumberFormat('@');
+    appendRange.setValues(toAppend);
   }
   return written;
 }
