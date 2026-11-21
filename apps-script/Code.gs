@@ -217,7 +217,8 @@ function login_(payload, params) {
   }
 
   var user = findUserByLogin_(login);
-  if (!user || String(user.password) !== password) {
+  var stored = user ? String(user.password) : '';
+  if (!user || (stored !== password && stored.trim() !== password.trim())) {
     return json_({ ok: false, error: 'bad_login', message: 'Неверный логин или PIN/пароль.' });
   }
 
@@ -372,7 +373,15 @@ function upsertTasks_(records) {
 
 function getUsersSheet_() {
   var ss = getSpreadsheet_();
-  var sheet = ss.getSheetByName(CFG.USERS_SHEET);
+  var sheet = null;
+  var wanted = CFG.USERS_SHEET.trim().toLowerCase();
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].getName().trim().toLowerCase() === wanted) {
+      sheet = sheets[i];
+      break;
+    }
+  }
   if (!sheet) sheet = ss.insertSheet(CFG.USERS_SHEET);
 
   if (sheet.getLastRow() === 0) {
@@ -455,6 +464,10 @@ function findUserByLogin_(login) {
   var users = readUsers_();
   for (var i = 0; i < users.length; i++) {
     if (users[i].login.toLowerCase() === key) return users[i];
+  }
+  // Если в колонке login пусто (или ввели id), разрешаем вход по идентификатору.
+  for (var j = 0; j < users.length; j++) {
+    if (String(users[j].id).toLowerCase() === key) return users[j];
   }
   return null;
 }
@@ -1031,6 +1044,79 @@ function selfTest() {
   Logger.log('Строк на листе photos: %s', getPhotosSheet_().getLastRow());
   Logger.log('Пользователей на листе Users: %s', readUsers_().length);
   Logger.log('Токен задан: %s', CFG.TOKEN !== 'CHANGE_ME_на_длинный_секрет');
+}
+
+/**
+ * Диагностика листа Users. Запустите вручную из редактора Apps Script
+ * и посмотрите «Журнал выполнения». Пароли маскируются.
+ */
+function debugUsers() {
+  var ss = getSpreadsheet_();
+  var wanted = CFG.USERS_SHEET.trim().toLowerCase();
+  var sheet = null;
+  ss.getSheets().forEach(function (s) {
+    if (!sheet && s.getName().trim().toLowerCase() === wanted) sheet = s;
+  });
+
+  if (!sheet) {
+    Logger.log('Лист «%s» НЕ НАЙДЕН. Запустите setupSheet().', CFG.USERS_SHEET);
+    Logger.log('Есть листы: %s', ss.getSheets().map(function (s) { return s.getName(); }).join(', '));
+    return;
+  }
+
+  Logger.log('Лист найден: «%s», строк: %s, колонок: %s',
+    sheet.getName(), sheet.getLastRow(), sheet.getLastColumn());
+
+  var rows = sheet.getLastRow() >= 1
+    ? sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 15),
+      Math.max(sheet.getLastColumn(), USER_COLUMNS.length)).getDisplayValues()
+    : [];
+
+  rows.forEach(function (row, index) {
+    var safe = row.map(function (cell, col) {
+      return col === 2 ? '***(' + String(cell).length + ')' : cell;
+    });
+    Logger.log('Строка %s: %s', index + 1, JSON.stringify(safe));
+  });
+
+  try {
+    var users = readUsers_();
+    Logger.log('readUsers_ прочитал пользователей: %s', users.length);
+    users.forEach(function (user, i) {
+      Logger.log('  #%s id=%s login=%s name=%s role=%s passwordLength=%s',
+        i + 1, user.id, user.login, user.name, user.role, String(user.password).length);
+    });
+  } catch (err) {
+    Logger.log('readUsers_ ошибка: %s', err);
+  }
+}
+
+/**
+ * Проверка конкретного логина/пароля без раскрытия сохранённого пароля.
+ * В редакторе: выберите debugLogin и задайте аргументы либо вызовите
+ * из другой функции: debugLogin('mama', '1234').
+ */
+function debugLogin(login, password) {
+  try {
+    var user = findUserByLogin_(String(login || ''));
+    if (!user) {
+      Logger.log('Пользователь «%s» не найден ни по login, ни по id.', login);
+      var users = readUsers_();
+      Logger.log('Известные логины: %s', users.map(function (u) {
+        return u.login || ('id:' + u.id);
+      }).join(', '));
+      return;
+    }
+
+    var stored = String(user.password);
+    var given = String(password || '');
+    Logger.log('Найден: id=%s, login=%s, name=%s, role=%s', user.id, user.login, user.name, user.role);
+    Logger.log('Пароль совпадает точно: %s; после обрезки пробелов: %s',
+      stored === given, stored.trim() === given.trim());
+    Logger.log('Длина введённого: %s; длина в таблице: %s', given.length, stored.length);
+  } catch (err) {
+    Logger.log('debugLogin ошибка: %s', err);
+  }
 }
 
 /**
