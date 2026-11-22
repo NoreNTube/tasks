@@ -23,7 +23,7 @@ window.APP_CONFIG = {
   // Имя Telegram-бота БЕЗ @ (например 'family_tasks_bot') для кнопки
   // «Подключить Telegram». Пусто — кнопка в шапке не показывается.
   // Токен бота здесь НЕ хранится, он живёт в «Свойствах скрипта» Apps Script.
-  telegramBotUsername: '',
+  telegramBotUsername: 'tasksgooglesheetsbot',
 
   // Как часто приложение само синхронизируется (мс). Минимум 20000.
   syncIntervalMs: 60000,
